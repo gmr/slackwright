@@ -184,6 +184,7 @@ class Stream:
         self._tasks: dict[str, tuple[str, TaskStatus]] = {}
         self._overflow: list[str] = []
         self._pending: list[str] = []
+        self._unsent = ''
         self._stopped = False
         self._finalized = False
 
@@ -205,7 +206,12 @@ class Stream:
             self._overflow.append(markdown)
             return
         self._chars += len(markdown)
-        await (await self._get()).append(markdown_text=markdown)
+        # The SDK keeps short text in a buffer and returns None. Keep a
+        # copy until a send, so a stop that fails does not lose it.
+        if await (await self._get()).append(markdown_text=markdown) is None:
+            self._unsent += markdown
+        else:
+            self._unsent = ''
 
     async def task(
         self,
@@ -239,6 +245,7 @@ class Stream:
                 for text, url in sources
             ]
         await (await self._get()).append(chunks=[chunk])
+        self._unsent = ''
 
     async def close(self) -> list[str]:
         """Stop the stream and post any overflow text.
@@ -292,9 +299,13 @@ class Stream:
                 await self._stream.stop(chunks=self._open_tasks() or None)
             except errors.SlackApiError as error:
                 # Slack stops an idle stream itself. Then the stream is
-                # already final, so do not try to stop it again.
+                # already final, so do not try to stop it again. Post
+                # the buffered text that Slack did not get as overflow.
                 if error.response.get('error') != _NOT_STREAMING:
                     raise
+                if self._unsent:
+                    self._overflow.insert(0, self._unsent)
+        self._unsent = ''
         self._finalized = True
 
     def _open_tasks(self) -> list[dict[str, typing.Any]]:

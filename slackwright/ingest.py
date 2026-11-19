@@ -37,6 +37,10 @@ SLACK_FILE_HOSTS = frozenset({'files.slack.com'})
 MAX_FILE_BYTES = 10 * 1024 * 1024
 """Largest file to download and give to the model."""
 
+# The Claude API vision docs allow 10 MB base64-encoded per image, see
+# https://platform.claude.com/docs/en/build-with-claude/vision ("Image
+# limits and costs"). 7,500,000 raw bytes is exactly 10,000,000 base64
+# characters. Amazon Bedrock allows only 5 MB base64-encoded.
 MAX_IMAGE_BYTES = 7_500_000
 """Largest image to give to the model. Base64 makes it about 10 MB."""
 
