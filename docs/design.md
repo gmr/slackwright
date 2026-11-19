@@ -199,7 +199,8 @@ agent gets, so the tests check that each field has a description.
 
 1. If the text is empty, return an empty list.
 2. If the text has 12,000 characters or fewer, post one message with
-   `markdown_text` and a plain `text` fallback for notifications.
+   `markdown_text`. Slack does not allow `text` or `blocks` with
+   `markdown_text` (`markdown_text_conflict`).
 3. If the text is longer, split it at top-level block boundaries
    (markdown-it tokens) into parts of 12,000 characters or fewer. Never
    split inside a code block or a table. Post each part as one message.
@@ -461,7 +462,8 @@ types to `text`, otherwise an error text block.
 - Sends the bot token only to Slack file hosts. A request hook checks
   each request and each redirect. This fixes the gap in imbi-slackbot,
   which sends the token to any `url_private`.
-- Stops at a maximum size (default 20 MB) and returns an error block.
+- Stops at a maximum size (default 10 MB, as in both bots today) and
+  returns an error block.
 
 ## 10. Lifecycle
 
