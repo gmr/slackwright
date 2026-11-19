@@ -112,6 +112,11 @@ Sources: [markdown block](https://docs.slack.dev/reference/block-kit/blocks/mark
 - `markdown-it-py`: splits text over 12,000 characters at block
   boundaries.
 
+Optional extras for form stores (section 7.2):
+
+- `slackwright[valkey]`: `valkey`.
+- `slackwright[postgres]`: `psycopg[pool]` 3.
+
 An MCP adapter (`toolkit.mcp(server)`, extra `slackwright[mcp]`) is
 deferred until a bot needs it. `toolkit.anthropic()` gives the tool
 list with descriptions, and its schemas are plain JSON Schema, so an
@@ -305,9 +310,29 @@ class FormStore(Protocol):
 if the key is already claimed. The key is `form_id` when
 `single_submission` is set, and `(form_id, user_id)` when it is not.
 The second key stops a double-click from making two submissions. slackwright ships
-`MemoryFormStore` for tests and single-process bots. A bot with more
-than one replica supplies a shared store, for example Redis or Valkey.
-imbi-slackbot picks a store in phase 4.
+slackwright ships three stores:
+
+| Store | Install | Backend |
+|---|---|---|
+| `MemoryFormStore` | core | dict; tests and single-process bots |
+| `ValkeyFormStore` | `slackwright[valkey]` | `valkey` asyncio client |
+| `PostgresFormStore` | `slackwright[postgres]` | `psycopg` 3 async pool |
+
+Each store takes a client or pool that the bot already has. It does
+not open or close connections itself.
+
+- **Valkey:** `put` is `SET key value EX ttl`. `claim` is
+  `SET claim_key 1 NX EX ttl`. Expiry is automatic. Keys use a
+  configurable prefix (default `slackwright:form:`).
+- **PostgreSQL:** two tables, `slackwright_forms (form_id PK, record
+  JSONB, expires_at)` and `slackwright_form_claims (claim_key PK,
+  form_id, claimed_at)`. `claim` is `INSERT ... ON CONFLICT DO NOTHING`
+  and checks the row count. `get` ignores rows past `expires_at`.
+  `await store.create_schema()` runs `CREATE TABLE IF NOT EXISTS`, and
+  `await store.purge_expired()` deletes old rows; the bot calls it on a
+  schedule. Table names are configurable.
+
+A bot with a different backend implements the protocol itself.
 
 `FormRecord` holds the spec, `channel_id`, `thread_ts`, `message_ts`,
 the requester, and the creation time. The default TTL is 7 days.
@@ -459,7 +484,7 @@ from both bots. `forms.Runtime` uses `track()` for `on_submit` tasks.
 | # | Work | Size | Done when |
 |---|---|---|---|
 | 1 | `render`, `blocks`, `toolkit` with `slack_post_markdown` and `slack_post_blocks`, `ingest`, `progress`, `inflight` | M | Tests pass; `post_markdown` posts a 30,000-character answer with a table and code in correct parts against a real test workspace. Test the table limits in a `markdown` block first, because they are not documented |
-| 2 | `forms`: specs, modal and inline flows, `MemoryFormStore`, `register()`, `slack_create_form` | L | An agent in a test workspace designs, posts, and receives a 5-field form in both modes |
+| 2 | `forms`: specs, modal and inline flows, the three stores, `register()`, `slack_create_form` | L | An agent in a test workspace designs, posts, and receives a 5-field form in both modes; the same store test suite passes for all three stores against real Valkey and PostgreSQL |
 | 3 | `canvas` and the three canvas tools | S | Create, edit a section, and read back match |
 | 4 | Move imbi-slackbot | S | `slackdwn.py`, `inflight.py`, and file code deleted from imbi; imbi tests pass; token host check active |
 | 5 | Move the private bot, with its own tool adapter and shared `FormStore` | L | Its `slackdwn.py` and `inflight.py` deleted; its tests pass |
@@ -478,8 +503,5 @@ Decided:
 3. Streaming is opt-in for each bot in phase 1. It can become the
    default after both bots use it without problems.
 4. Alert, Card, and Carousel blocks are deferred (section 6).
-
-Open:
-
-1. `FormStore` for imbi-slackbot. Recommendation: PostgreSQL, which is
-   already present. `MemoryFormStore` loses all forms at each deploy.
+5. slackwright ships optional Valkey and PostgreSQL form stores
+   (section 7.2). Each bot picks one in its migration phase.
