@@ -314,6 +314,21 @@ class StreamTestCase(unittest.IsolatedAsyncioTestCase):
             slack.payloads('chat.postMessage')[0]['markdown_text'], 'late'
         )
 
+    async def test_stream_stopped_by_slack(self) -> None:
+        async with fake_slack.FakeSlack() as slack:
+            slack.responses['chat.stopStream'] = [
+                {'ok': False, 'error': 'message_not_in_streaming_state'},
+            ]
+            stream = render.Stream(slack.client, 'C1', '1.0')
+            await stream.text('x' * 11_000)
+            await stream.text('y' * 2_000)
+            await stream.close()
+            await stream.close()
+        self.assertEqual(len(slack.payloads('chat.stopStream')), 1)
+        self.assertEqual(
+            slack.payloads('chat.postMessage')[0]['markdown_text'], 'y' * 2_000
+        )
+
 
 class NeutralizeBroadcastsTimeTestCase(unittest.TestCase):
     def test_many_carets_without_pipe(self) -> None:

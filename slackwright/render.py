@@ -16,6 +16,7 @@ import time
 import typing
 
 import markdown_it
+from slack_sdk import errors
 
 from slackwright import blocks
 
@@ -31,6 +32,8 @@ STREAM_MAX_TASKS = 50
 """Unique tasks per streamed message."""
 
 TaskStatus = typing.Literal['pending', 'in_progress', 'complete', 'error']
+
+_NOT_STREAMING = 'message_not_in_streaming_state'
 
 _PARSER = markdown_it.MarkdownIt('commonmark').enable('table')
 
@@ -138,6 +141,9 @@ class Stream:
     stream is near Slack's time limit, it is stopped, open tasks are
     marked as errors, and the rest of the text is posted after it.
 
+    A stream is for one task. Do not call its methods from more than
+    one task at the same time.
+
     Args:
         slack: A ``slack_sdk`` ``AsyncWebClient``.
         channel_id: The channel of the thread.
@@ -239,7 +245,7 @@ class Stream:
 
         Returns the ``ts`` values of overflow messages. If a post fails,
         the parts that were not posted stay, and the next call tries
-        them again.
+        them again. Do not call it again before the last call returns.
 
         """
         await self._stop()
@@ -282,7 +288,13 @@ class Stream:
             return
         self._stopped = True
         if self._stream is not None:
-            await self._stream.stop(chunks=self._open_tasks() or None)
+            try:
+                await self._stream.stop(chunks=self._open_tasks() or None)
+            except errors.SlackApiError as error:
+                # Slack stops an idle stream itself. Then the stream is
+                # already final, so do not try to stop it again.
+                if error.response.get('error') != _NOT_STREAMING:
+                    raise
         self._finalized = True
 
     def _open_tasks(self) -> list[dict[str, typing.Any]]:

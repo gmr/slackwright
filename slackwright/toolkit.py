@@ -238,10 +238,16 @@ class Toolkit:
         parts = render.split_markdown(self._safe(values.text))
         self._reserve(len(parts))
         timestamps: list[str] = []
-        for part in parts:
-            timestamps += await render.post_markdown(
-                self._slack, channel_id, self._thread_for(channel_id), part
-            )
+        for index, part in enumerate(parts):
+            try:
+                timestamps += await render.post_markdown(
+                    self._slack, channel_id, self._thread_for(channel_id), part
+                )
+            except BaseException:
+                # Give back only the parts that were not tried. A failed
+                # part can be in Slack, so it stays counted.
+                self._posts -= len(parts) - index - 1
+                raise
         return ToolResult.ok(ts=timestamps)
 
     async def _post_blocks(

@@ -208,6 +208,19 @@ class CallTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn('post limit', result.text)
         self.assertEqual(self.slack.calls, [])
 
+    async def test_failed_part_releases_parts_not_tried(self) -> None:
+        self.slack.responses['chat.postMessage'] = [
+            {'ok': True, 'ts': '1.1'},
+            {'ok': False, 'error': 'ratelimited'},
+            {'ok': True, 'ts': '1.2'},
+        ]
+        kit = self._kit(max_posts=5)
+        text = '\n\n'.join(c * 7000 for c in 'abcde')
+        failed = await kit.call('slack_post_markdown', {'text': text})
+        retry = await kit.call('slack_post_markdown', {'text': 'f'})
+        self.assertTrue(failed.is_error)
+        self.assertFalse(retry.is_error)
+
     async def test_bad_message_does_not_use_the_limit(self) -> None:
         kit = self._kit(max_posts=1)
         bad = await kit.call(
