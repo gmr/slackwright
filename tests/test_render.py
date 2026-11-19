@@ -17,6 +17,45 @@ def _long_answer() -> str:
     return '\n\n'.join(parts)
 
 
+class NeutralizeBroadcastsTestCase(unittest.TestCase):
+    def test_special_mentions(self) -> None:
+        for name in ('channel', 'here', 'everyone'):
+            with self.subTest(name=name):
+                expected = f'hi @​{name}!'
+                self.assertEqual(
+                    render.neutralize_broadcasts(f'hi <!{name}>!'), expected
+                )
+                self.assertEqual(
+                    render.neutralize_broadcasts(f'hi <!{name}|x>!'), expected
+                )
+                self.assertEqual(
+                    render.neutralize_broadcasts(f'hi @{name}!'), expected
+                )
+
+    def test_subteam(self) -> None:
+        self.assertEqual(
+            render.neutralize_broadcasts('<!subteam^S123|@ops> look'),
+            '@​ops look',
+        )
+        self.assertEqual(
+            render.neutralize_broadcasts('<!subteam^S123|ops>'), '@​ops'
+        )
+        self.assertEqual(
+            render.neutralize_broadcasts('<!subteam^S123>'), '@​group'
+        )
+
+    def test_other_text_is_unchanged(self) -> None:
+        for text in (
+            '<@U123> hi',
+            'mail me at email@here.com',
+            '@channels and @hereafter',
+            '<!date^1392734382|today>',
+            'plain text',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(render.neutralize_broadcasts(text), text)
+
+
 class SplitMarkdownTestCase(unittest.TestCase):
     def test_empty_text(self) -> None:
         self.assertEqual(render.split_markdown('  \n '), [])

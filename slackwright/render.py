@@ -11,6 +11,7 @@ the 12,000-character limit.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import typing
 
@@ -32,6 +33,34 @@ STREAM_MAX_TASKS = 50
 TaskStatus = typing.Literal['pending', 'in_progress', 'complete', 'error']
 
 _PARSER = markdown_it.MarkdownIt('commonmark').enable('table')
+
+_ZWSP = '​'
+_BROADCAST = re.compile(r'<!(channel|here|everyone)(?:\|[^>]*)?>')
+_SUBTEAM = re.compile(r'<!subteam\^[A-Z0-9]+(?:\|([^>]*))?>')
+_BARE_BROADCAST = re.compile(r'(?<![\w.@])@(channel|here|everyone)\b')
+
+
+def neutralize_broadcasts(text: str) -> str:
+    """Return ``text`` with no mention that notifies a channel or group.
+
+    Replaces ``<!channel>``, ``<!here>``, ``<!everyone>``,
+    ``<!subteam^ID|@label>``, and the bare words ``@channel``,
+    ``@here``, and ``@everyone`` with plain text. A zero-width space
+    after the ``@`` stops Slack from making a mention. User mentions
+    such as ``<@U123>`` do not change.
+
+    The :class:`~slackwright.toolkit.Toolkit` calls this on agent text
+    unless the bot sets ``allow_broadcasts``. :func:`post_markdown` does
+    not call it, so a bot can call it on its final answer before it
+    posts that answer.
+
+    """
+    text = _BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
+    text = _SUBTEAM.sub(
+        lambda m: f'@{_ZWSP}{(m.group(1) or "").lstrip("@") or "group"}',
+        text,
+    )
+    return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
 
 
 def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:

@@ -192,6 +192,9 @@ agent gets, so the tests check that each field has a description.
   - Each form shows a context line: "Form created by the assistant".
   - Form validation rejects a field whose label or hint asks for a
     password, token, API key, or secret (a small word list).
+  - The tools neutralize broadcast mentions (`<!channel>`, `<!here>`,
+    `<!everyone>`, user groups) in agent text, unless the bot sets
+    `allow_broadcasts`.
 
 ## 5. Rendering
 

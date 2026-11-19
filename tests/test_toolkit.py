@@ -103,6 +103,39 @@ class CallTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(post['text'], 'Status')
         self.assertEqual(post['blocks'][0]['type'], 'header')
 
+    async def test_broadcasts_neutralized_by_default(self) -> None:
+        kit = self._kit()
+        await kit.call('slack_post_markdown', {'text': '<!here> hi'})
+        await kit.call(
+            'slack_post_blocks',
+            {
+                'fallback_text': '<!channel>',
+                'blocks': [
+                    {'type': 'markdown', 'text': '<!everyone>'},
+                    {'type': 'context', 'elements': ['<!subteam^S1|@ops>']},
+                ],
+            },
+        )
+        markdown, blocks = self.slack.payloads('chat.postMessage')
+        self.assertEqual(markdown['markdown_text'], '@​here hi')
+        self.assertEqual(blocks['text'], '@​channel')
+        self.assertEqual(blocks['blocks'][0]['text'], '@​everyone')
+        self.assertEqual(blocks['blocks'][1]['elements'][0]['text'], '@​ops')
+
+    async def test_allow_broadcasts(self) -> None:
+        kit = toolkit.Toolkit(
+            self.slack.client,
+            channel_id='C1',
+            thread_ts='1.0',
+            user_id='U1',
+            allow_broadcasts=True,
+        )
+        await kit.call('slack_post_markdown', {'text': '<!here> hi'})
+        self.assertEqual(
+            self.slack.payloads('chat.postMessage')[0]['markdown_text'],
+            '<!here> hi',
+        )
+
     async def test_unknown_tool(self) -> None:
         result = await self._kit().call('slack_nope', {})
         self.assertTrue(result.is_error)

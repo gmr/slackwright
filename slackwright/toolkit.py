@@ -110,6 +110,10 @@ class Toolkit:
             When it is set, the tools accept a ``channel_id`` and post
             there if the check returns ``True``.
         max_posts: The maximum number of posts for this toolkit.
+        allow_broadcasts: When ``False`` (the default), the tools
+            change ``<!channel>``, ``<!here>``, ``<!everyone>``, and
+            user group mentions in agent text to plain text. See
+            :func:`slackwright.render.neutralize_broadcasts`.
 
     """
 
@@ -122,6 +126,7 @@ class Toolkit:
         user_id: str,
         can_post: CanPost | None = None,
         max_posts: int = 5,
+        allow_broadcasts: bool = False,
     ) -> None:
         self._slack = slack
         self._channel_id = channel_id
@@ -129,6 +134,7 @@ class Toolkit:
         self._user_id = user_id
         self._can_post = can_post
         self._max_posts = max_posts
+        self._allow_broadcasts = allow_broadcasts
         self._posts = 0
 
     def anthropic(self) -> list[dict[str, typing.Any]]:
@@ -193,11 +199,31 @@ class Toolkit:
             schema['properties'].pop('channel_id', None)
         return schema
 
+    def _safe(self, text: str) -> str:
+        """Return agent ``text`` with broadcasts neutralized if needed."""
+        if self._allow_broadcasts:
+            return text
+        return render.neutralize_broadcasts(text)
+
+    def _safe_block(
+        self, spec: block_specs.BlockSpec
+    ) -> block_specs.BlockSpec:
+        if isinstance(spec, block_specs.MarkdownSpec):
+            return spec.model_copy(update={'text': self._safe(spec.text)})
+        if isinstance(spec, block_specs.ContextSpec):
+            return spec.model_copy(
+                update={'elements': [self._safe(e) for e in spec.elements]}
+            )
+        return spec
+
     async def _post_markdown(
         self, values: PostMarkdownInput, channel_id: str
     ) -> ToolResult:
         timestamps = await render.post_markdown(
-            self._slack, channel_id, self._thread_for(channel_id), values.text
+            self._slack,
+            channel_id,
+            self._thread_for(channel_id),
+            self._safe(values.text),
         )
         return ToolResult.ok(ts=timestamps)
 
@@ -207,8 +233,10 @@ class Toolkit:
         response = await self._slack.chat_postMessage(
             channel=channel_id,
             thread_ts=self._thread_for(channel_id),
-            blocks=block_specs.to_blocks(values.blocks),
-            text=values.fallback_text,
+            blocks=block_specs.to_blocks(
+                [self._safe_block(spec) for spec in values.blocks]
+            ),
+            text=self._safe(values.fallback_text),
         )
         return ToolResult.ok(ts=response['ts'])
 
