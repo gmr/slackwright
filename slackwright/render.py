@@ -34,20 +34,36 @@ TaskStatus = typing.Literal['pending', 'in_progress', 'complete', 'error']
 
 _PARSER = markdown_it.MarkdownIt('commonmark').enable('table')
 
-_ZWSP = '​'
-_BROADCAST = re.compile(r'<!(channel|here|everyone)(?:\|[^>]*)?>')
-_SUBTEAM = re.compile(r'<!subteam\^[A-Z0-9]+(?:\|([^>]*))?>')
-_BARE_BROADCAST = re.compile(r'(?<![\w.@])@(channel|here|everyone)\b')
+_ZWSP = '\u200b'
+_SPECIAL = re.compile(r'<!([^>|]*)(?:\|([^>]*))?>', re.IGNORECASE)
+_BARE_BROADCAST = re.compile(
+    r'(?<![A-Za-z0-9])@(channel|here|everyone|group)(?![A-Za-z0-9])',
+    re.IGNORECASE,
+)
+
+
+def _special_label(match: re.Match[str]) -> str:
+    name, label = match.group(1), match.group(2)
+    if name.lower().startswith('date^'):
+        return match.group(0)
+    label = (label or '').removeprefix('@')
+    if not label:
+        label = name.split('^', 1)[0]
+        if label.lower() == 'subteam':
+            label = 'group'
+    return f'@{_ZWSP}{label or "group"}'
 
 
 def neutralize_broadcasts(text: str) -> str:
     """Return ``text`` with no mention that notifies a channel or group.
 
-    Replaces ``<!channel>``, ``<!here>``, ``<!everyone>``,
-    ``<!subteam^ID|@label>``, and the bare words ``@channel``,
-    ``@here``, and ``@everyone`` with plain text. A zero-width space
-    after the ``@`` stops Slack from making a mention. User mentions
-    such as ``<@U123>`` do not change.
+    Blocks every special ``<!...>`` token, such as ``<!channel>``,
+    ``<!here>``, and ``<!subteam^ID|@label>``, except ``<!date^...>``.
+    Also blocks the bare words ``@channel``, ``@here``, ``@everyone``,
+    and ``@group`` in any letter case. A zero-width space after the
+    ``@`` stops Slack from making a mention. User mentions such as
+    ``<@U123>`` and email addresses such as ``x@here.com`` do not
+    change.
 
     The :class:`~slackwright.toolkit.Toolkit` calls this on agent text
     unless the bot sets ``allow_broadcasts``. :func:`post_markdown` does
@@ -55,11 +71,7 @@ def neutralize_broadcasts(text: str) -> str:
     posts that answer.
 
     """
-    text = _BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
-    text = _SUBTEAM.sub(
-        lambda m: f'@{_ZWSP}{(m.group(1) or "").lstrip("@") or "group"}',
-        text,
-    )
+    text = _SPECIAL.sub(_special_label, text)
     return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
 
 

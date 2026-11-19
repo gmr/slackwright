@@ -21,27 +21,46 @@ class NeutralizeBroadcastsTestCase(unittest.TestCase):
     def test_special_mentions(self) -> None:
         for name in ('channel', 'here', 'everyone'):
             with self.subTest(name=name):
-                expected = f'hi @​{name}!'
+                expected = f'hi @\u200b{name}!'
                 self.assertEqual(
                     render.neutralize_broadcasts(f'hi <!{name}>!'), expected
-                )
-                self.assertEqual(
-                    render.neutralize_broadcasts(f'hi <!{name}|x>!'), expected
                 )
                 self.assertEqual(
                     render.neutralize_broadcasts(f'hi @{name}!'), expected
                 )
 
+    def test_every_special_token(self) -> None:
+        for text, expected in (
+            ('<!GROUP>', '@​GROUP'),
+            ('<!Here>', '@​Here'),
+            ('<!channel|@channel>', '@​channel'),
+            ('<!here|x>', '@​x'),
+            ('<!subteam^s-1_x|@devs>', '@​devs'),
+            ('<!|>', '@​group'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(render.neutralize_broadcasts(text), expected)
+
+    def test_bare_words(self) -> None:
+        for text, expected in (
+            ('_@here_', '_@​here_'),
+            ('*@channel*', '*@​channel*'),
+            ('@Everyone', '@​Everyone'),
+            ('@group', '@​group'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(render.neutralize_broadcasts(text), expected)
+
     def test_subteam(self) -> None:
         self.assertEqual(
             render.neutralize_broadcasts('<!subteam^S123|@ops> look'),
-            '@​ops look',
+            '@\u200bops look',
         )
         self.assertEqual(
-            render.neutralize_broadcasts('<!subteam^S123|ops>'), '@​ops'
+            render.neutralize_broadcasts('<!subteam^S123|ops>'), '@\u200bops'
         )
         self.assertEqual(
-            render.neutralize_broadcasts('<!subteam^S123>'), '@​group'
+            render.neutralize_broadcasts('<!subteam^S123>'), '@\u200bgroup'
         )
 
     def test_other_text_is_unchanged(self) -> None:
@@ -50,6 +69,8 @@ class NeutralizeBroadcastsTestCase(unittest.TestCase):
             'mail me at email@here.com',
             '@channels and @hereafter',
             '<!date^1392734382|today>',
+            '<!date^1700000000^{date}|Nov 14>',
+            'x@here.com',
             'plain text',
         ):
             with self.subTest(text=text):
