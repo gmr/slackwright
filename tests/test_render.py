@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 
 from slackwright import render
@@ -18,58 +19,71 @@ def _long_answer() -> str:
 
 
 class NeutralizeBroadcastsTestCase(unittest.TestCase):
+    ATTACKS = (
+        '<!here>',
+        '<!GROUP>',
+        '<!subteam^S1|@devs>',
+        '<!x|<!here>>',
+        '<!date^1^x|<!here>>',
+        '<!date^1392734382|today>',
+        '<!DATE^1700000000^{date}|Nov 14>',
+        '<!|>',
+    )
+
     def test_special_mentions(self) -> None:
         for name in ('channel', 'here', 'everyone'):
             with self.subTest(name=name):
-                expected = f'hi @\u200b{name}!'
                 self.assertEqual(
-                    render.neutralize_broadcasts(f'hi <!{name}>!'), expected
+                    render.neutralize_broadcasts(f'hi <!{name}>!'),
+                    f'hi <\u200b!{name}>!',
                 )
                 self.assertEqual(
-                    render.neutralize_broadcasts(f'hi @{name}!'), expected
+                    render.neutralize_broadcasts(f'hi @{name}!'),
+                    f'hi @\u200b{name}!',
                 )
 
     def test_every_special_token(self) -> None:
         for text, expected in (
-            ('<!GROUP>', '@​GROUP'),
-            ('<!Here>', '@​Here'),
-            ('<!channel|@channel>', '@​channel'),
-            ('<!here|x>', '@​x'),
-            ('<!subteam^s-1_x|@devs>', '@​devs'),
-            ('<!|>', '@​group'),
+            ('<!here>', '<\u200b!here>'),
+            ('<!GROUP>', '<\u200b!GROUP>'),
+            ('<!subteam^S1|@devs>', '<\u200b!subteam^S1|@devs>'),
+            ('<!channel|@channel>', '<\u200b!channel|@\u200bchannel>'),
+            ('<!|>', '<\u200b!|>'),
         ):
             with self.subTest(text=text):
                 self.assertEqual(render.neutralize_broadcasts(text), expected)
+
+    def test_nested_label_bypass(self) -> None:
+        result = render.neutralize_broadcasts('<!x|<!here>>')
+        self.assertIsNone(re.search('<!', result))
+
+    def test_date_label_bypass(self) -> None:
+        result = render.neutralize_broadcasts('<!date^1^x|<!here>>')
+        self.assertNotIn('<!here', result)
+
+    def test_no_live_token_remains(self) -> None:
+        for text in self.ATTACKS:
+            with self.subTest(text=text):
+                result = render.neutralize_broadcasts(text)
+                self.assertIsNone(re.search(r'<!(?!date\^)', result))
 
     def test_bare_words(self) -> None:
         for text, expected in (
-            ('_@here_', '_@​here_'),
-            ('*@channel*', '*@​channel*'),
-            ('@Everyone', '@​Everyone'),
-            ('@group', '@​group'),
+            ('_@here_', '_@\u200bhere_'),
+            ('*@channel*', '*@\u200bchannel*'),
+            ('@Everyone', '@\u200bEveryone'),
+            ('@group', '@\u200bgroup'),
         ):
             with self.subTest(text=text):
                 self.assertEqual(render.neutralize_broadcasts(text), expected)
-
-    def test_subteam(self) -> None:
-        self.assertEqual(
-            render.neutralize_broadcasts('<!subteam^S123|@ops> look'),
-            '@\u200bops look',
-        )
-        self.assertEqual(
-            render.neutralize_broadcasts('<!subteam^S123|ops>'), '@\u200bops'
-        )
-        self.assertEqual(
-            render.neutralize_broadcasts('<!subteam^S123>'), '@\u200bgroup'
-        )
 
     def test_other_text_is_unchanged(self) -> None:
         for text in (
             '<@U123> hi',
             'mail me at email@here.com',
             '@channels and @hereafter',
-            '<!date^1392734382|today>',
             '<!date^1700000000^{date}|Nov 14>',
+            '<!date^1700000000^{date} at {time}^https://x.test|Nov 14>',
             'x@here.com',
             'plain text',
         ):

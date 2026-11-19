@@ -35,35 +35,26 @@ TaskStatus = typing.Literal['pending', 'in_progress', 'complete', 'error']
 _PARSER = markdown_it.MarkdownIt('commonmark').enable('table')
 
 _ZWSP = '\u200b'
-_SPECIAL = re.compile(r'<!([^>|]*)(?:\|([^>]*))?>', re.IGNORECASE)
+# A ``<!`` that does not start a strict Slack date token. The date
+# pattern excludes ``<`` and ``>``, so no token can hide inside it.
+_SPECIAL = re.compile(r'<!(?!date\^\d+\^[^<>|]*(?:\^[^<>|]*)?\|[^<>]*>)')
 _BARE_BROADCAST = re.compile(
     r'(?<![A-Za-z0-9])@(channel|here|everyone|group)(?![A-Za-z0-9])',
     re.IGNORECASE,
 )
 
 
-def _special_label(match: re.Match[str]) -> str:
-    name, label = match.group(1), match.group(2)
-    if name.lower().startswith('date^'):
-        return match.group(0)
-    label = (label or '').removeprefix('@')
-    if not label:
-        label = name.split('^', 1)[0]
-        if label.lower() == 'subteam':
-            label = 'group'
-    return f'@{_ZWSP}{label or "group"}'
-
-
 def neutralize_broadcasts(text: str) -> str:
     """Return ``text`` with no mention that notifies a channel or group.
 
-    Blocks every special ``<!...>`` token, such as ``<!channel>``,
-    ``<!here>``, and ``<!subteam^ID|@label>``, except ``<!date^...>``.
-    Also blocks the bare words ``@channel``, ``@here``, ``@everyone``,
-    and ``@group`` in any letter case. A zero-width space after the
-    ``@`` stops Slack from making a mention. User mentions such as
-    ``<@U123>`` and email addresses such as ``x@here.com`` do not
-    change.
+    Breaks every ``<!`` except a strict Slack date token such as
+    ``<!date^1700000000^{date}|Nov 14>``. A zero-width space after the
+    ``<`` changes tokens such as ``<!channel>``, ``<!here>``, and
+    ``<!subteam^ID|@label>`` into literal text. Also blocks the bare
+    words ``@channel``, ``@here``, ``@everyone``, and ``@group`` in any
+    letter case with a zero-width space after the ``@``. User mentions
+    such as ``<@U123>`` and email addresses such as ``x@here.com`` do
+    not change.
 
     The :class:`~slackwright.toolkit.Toolkit` calls this on agent text
     unless the bot sets ``allow_broadcasts``. :func:`post_markdown` does
@@ -71,7 +62,7 @@ def neutralize_broadcasts(text: str) -> str:
     posts that answer.
 
     """
-    text = _SPECIAL.sub(_special_label, text)
+    text = _SPECIAL.sub(f'<{_ZWSP}!', text)
     return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
 
 

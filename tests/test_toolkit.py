@@ -117,11 +117,12 @@ class CallTestCase(unittest.IsolatedAsyncioTestCase):
             },
         )
         markdown, blocks = self.slack.payloads('chat.postMessage')
-        self.assertEqual(markdown['markdown_text'], '@\u200bhere hi')
-        self.assertEqual(blocks['text'], '@\u200bchannel')
-        self.assertEqual(blocks['blocks'][0]['text'], '@\u200beveryone')
+        self.assertEqual(markdown['markdown_text'], '<\u200b!here> hi')
+        self.assertEqual(blocks['text'], '<\u200b!channel>')
+        self.assertEqual(blocks['blocks'][0]['text'], '<\u200b!everyone>')
         self.assertEqual(
-            blocks['blocks'][1]['elements'][0]['text'], '@\u200bops'
+            blocks['blocks'][1]['elements'][0]['text'],
+            '<\u200b!subteam^S1|@ops>',
         )
 
     async def test_allow_broadcasts(self) -> None:
