@@ -76,11 +76,18 @@ async def wait_for_drain() -> bool:
         _active,
         SHUTDOWN_TIMEOUT,
     )
-    try:
-        await asyncio.wait_for(_get_drain().wait(), SHUTDOWN_TIMEOUT)
-    except TimeoutError:
-        LOGGER.warning(
-            'Shutdown timeout with %i task(s) still in flight', _active
-        )
-        return False
+    # New work can start after the drain event is set and before this
+    # task wakes up, so check the count again after each wakeup.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SHUTDOWN_TIMEOUT
+    while _active > 0:
+        try:
+            await asyncio.wait_for(
+                _get_drain().wait(), max(deadline - loop.time(), 0)
+            )
+        except TimeoutError:
+            LOGGER.warning(
+                'Shutdown timeout with %i task(s) still in flight', _active
+            )
+            return False
     return True

@@ -81,6 +81,10 @@ class ToBlocksTestCase(unittest.TestCase):
         with self.assertRaises(pydantic.ValidationError):
             _specs([{'type': 'button', 'text': 'x'}])
 
+    def test_empty_context_element_is_rejected(self) -> None:
+        with self.assertRaises(pydantic.ValidationError):
+            _specs([{'type': 'context', 'elements': ['']}])
+
     def test_extra_field_is_rejected(self) -> None:
         with self.assertRaises(pydantic.ValidationError):
             _specs([{'type': 'divider', 'color': 'red'}])

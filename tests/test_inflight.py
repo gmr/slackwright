@@ -26,6 +26,19 @@ class InflightTestCase(unittest.IsolatedAsyncioTestCase):
         await task
         self.assertEqual(inflight.active(), 0)
 
+    async def test_drain_checks_new_work(self) -> None:
+        inflight.SHUTDOWN_TIMEOUT = 0.05
+        first, second = inflight.track(), inflight.track()
+        await first.__aenter__()
+        waiter = asyncio.create_task(inflight.wait_for_drain())
+        await asyncio.sleep(0)
+        # The second unit starts after the drain event is set and
+        # before the waiter wakes up.
+        await first.__aexit__(None, None, None)
+        await second.__aenter__()
+        self.assertFalse(await waiter)
+        await second.__aexit__(None, None, None)
+
     async def test_drain_timeout(self) -> None:
         inflight.SHUTDOWN_TIMEOUT = 0.01
         async with inflight.track():

@@ -37,7 +37,9 @@ _PARSER = markdown_it.MarkdownIt('commonmark').enable('table')
 _ZWSP = '\u200b'
 # A ``<!`` that does not start a strict Slack date token. The date
 # pattern excludes ``<`` and ``>``, so no token can hide inside it.
-_SPECIAL = re.compile(r'<!(?!date\^\d+\^[^<>|]*(?:\^[^<>|]*)?\|[^<>]*>)')
+# The format and the optional link share one field that can contain
+# ``^``. Two fields that both match ``^`` make the time quadratic.
+_SPECIAL = re.compile(r'<!(?!date\^\d+\^[^<>|]*\|[^<>]*>)')
 _BARE_BROADCAST = re.compile(
     r'(?<![A-Za-z0-9])@(channel|here|everyone|group)(?![A-Za-z0-9])',
     re.IGNORECASE,
@@ -175,7 +177,9 @@ class Stream:
         self._chars = 0
         self._tasks: dict[str, tuple[str, TaskStatus]] = {}
         self._overflow: list[str] = []
+        self._pending: list[str] = []
         self._stopped = False
+        self._finalized = False
 
     @property
     def ts(self) -> str | None:
@@ -188,6 +192,7 @@ class Stream:
             return
         if (
             self._stopped
+            or self._overflow
             or self._chars + len(markdown) > MARKDOWN_LIMIT
             or await self._expired()
         ):
@@ -232,16 +237,24 @@ class Stream:
     async def close(self) -> list[str]:
         """Stop the stream and post any overflow text.
 
-        Returns the ``ts`` values of overflow messages.
+        Returns the ``ts`` values of overflow messages. If a post fails,
+        the parts that were not posted stay, and the next call tries
+        them again.
 
         """
         await self._stop()
-        overflow, self._overflow = ''.join(self._overflow), []
-        if not overflow.strip():
-            return []
-        return await post_markdown(
-            self._slack, self._channel_id, self._thread_ts, overflow
-        )
+        self._pending.extend(split_markdown(''.join(self._overflow)))
+        self._overflow = []
+        timestamps: list[str] = []
+        while self._pending:
+            timestamps += await post_markdown(
+                self._slack,
+                self._channel_id,
+                self._thread_ts,
+                self._pending[0],
+            )
+            self._pending.pop(0)
+        return timestamps
 
     async def _get(self) -> typing.Any:
         if self._stream is None:
@@ -263,19 +276,23 @@ class Stream:
         return True
 
     async def _stop(self) -> None:
-        if self._stopped:
+        # ``_stopped`` blocks new appends. ``_finalized`` is set only
+        # when the stop succeeds, so a failed stop can be tried again.
+        if self._finalized:
             return
         self._stopped = True
-        if self._stream is None:
-            return
-        open_tasks = [
+        if self._stream is not None:
+            await self._stream.stop(chunks=self._open_tasks() or None)
+        self._finalized = True
+
+    def _open_tasks(self) -> list[dict[str, typing.Any]]:
+        return [
             _task_chunk(
                 task_id, title, 'error', 'Stopped before this step finished.'
             )
             for task_id, (title, status) in self._tasks.items()
             if status in ('pending', 'in_progress')
         ]
-        await self._stream.stop(chunks=open_tasks or None)
 
 
 def _task_chunk(

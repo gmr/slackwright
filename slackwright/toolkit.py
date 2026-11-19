@@ -19,6 +19,7 @@ import json
 import logging
 import typing
 
+import aiohttp
 import pydantic
 from slack_sdk import errors
 
@@ -109,7 +110,8 @@ class Toolkit:
         can_post: Optional ``async can_post(channel_id, user_id)``.
             When it is set, the tools accept a ``channel_id`` and post
             there if the check returns ``True``.
-        max_posts: The maximum number of posts for this toolkit.
+        max_posts: The maximum number of messages for this toolkit.
+            Long Markdown that is split counts as more than one.
         allow_broadcasts: When ``False`` (the default), the tools
             change ``<!channel>``, ``<!here>``, ``<!everyone>``, and
             user group mentions in agent text to plain text. See
@@ -164,13 +166,10 @@ class Toolkit:
             return ToolResult.error(
                 f'you cannot post to channel {values.channel_id}'
             )
-        if self._posts >= self._max_posts:
-            return ToolResult.error(
-                f'post limit reached ({self._max_posts} per turn)'
-            )
-        self._posts += 1
         try:
             return await tool.handler(self, values, channel_id)
+        except pydantic.ValidationError as error:
+            return ToolResult.error(_describe(error))
         except ValueError as error:
             return ToolResult.error(str(error))
         except errors.SlackApiError as error:
@@ -178,6 +177,22 @@ class Toolkit:
             return ToolResult.error(
                 f'Slack API error: {error.response.get("error")}'
             )
+        except (aiohttp.ClientError, TimeoutError) as error:
+            LOGGER.warning('Tool %s failed: %r', name, error)
+            return ToolResult.error(f'cannot connect to Slack: {error!r}')
+
+    def _reserve(self, posts: int) -> None:
+        """Count ``posts`` against the limit. Raise if they do not fit.
+
+        Call this after all checks that do not send a request, so that
+        a bad request does not use up the limit.
+
+        """
+        if self._posts + posts > self._max_posts:
+            raise ValueError(
+                f'post limit reached ({self._max_posts} per turn)'
+            )
+        self._posts += posts
 
     async def _target(self, channel_id: str | None) -> str | None:
         """Return the channel to post to, or ``None`` if not allowed."""
@@ -208,34 +223,38 @@ class Toolkit:
     def _safe_block(
         self, spec: block_specs.BlockSpec
     ) -> block_specs.BlockSpec:
+        # Validate again: neutralization makes the text longer.
         if isinstance(spec, block_specs.MarkdownSpec):
-            return spec.model_copy(update={'text': self._safe(spec.text)})
-        if isinstance(spec, block_specs.ContextSpec):
-            return spec.model_copy(
-                update={'elements': [self._safe(e) for e in spec.elements]}
-            )
-        return spec
+            update: dict[str, typing.Any] = {'text': self._safe(spec.text)}
+        elif isinstance(spec, block_specs.ContextSpec):
+            update = {'elements': [self._safe(e) for e in spec.elements]}
+        else:
+            return spec
+        return type(spec).model_validate(spec.model_dump() | update)
 
     async def _post_markdown(
         self, values: PostMarkdownInput, channel_id: str
     ) -> ToolResult:
-        timestamps = await render.post_markdown(
-            self._slack,
-            channel_id,
-            self._thread_for(channel_id),
-            self._safe(values.text),
-        )
+        parts = render.split_markdown(self._safe(values.text))
+        self._reserve(len(parts))
+        timestamps: list[str] = []
+        for part in parts:
+            timestamps += await render.post_markdown(
+                self._slack, channel_id, self._thread_for(channel_id), part
+            )
         return ToolResult.ok(ts=timestamps)
 
     async def _post_blocks(
         self, values: PostBlocksInput, channel_id: str
     ) -> ToolResult:
+        message_blocks = block_specs.to_blocks(
+            [self._safe_block(spec) for spec in values.blocks]
+        )
+        self._reserve(1)
         response = await self._slack.chat_postMessage(
             channel=channel_id,
             thread_ts=self._thread_for(channel_id),
-            blocks=block_specs.to_blocks(
-                [self._safe_block(spec) for spec in values.blocks]
-            ),
+            blocks=message_blocks,
             text=self._safe(values.fallback_text),
         )
         return ToolResult.ok(ts=response['ts'])

@@ -200,6 +200,47 @@ class CallTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second.is_error)
         self.assertIn('post limit', second.text)
 
+    async def test_post_limit_counts_messages(self) -> None:
+        kit = self._kit(max_posts=1)
+        result = await kit.call(
+            'slack_post_markdown', {'text': 'a' * 7000 + '\n\n' + 'b' * 7000}
+        )
+        self.assertIn('post limit', result.text)
+        self.assertEqual(self.slack.calls, [])
+
+    async def test_bad_message_does_not_use_the_limit(self) -> None:
+        kit = self._kit(max_posts=1)
+        bad = await kit.call(
+            'slack_post_blocks',
+            {
+                'fallback_text': 'x',
+                'blocks': [{'type': 'markdown', 'text': 'x' * 7000}] * 2,
+            },
+        )
+        good = await kit.call('slack_post_markdown', {'text': 'a'})
+        self.assertIn('markdown blocks', bad.text)
+        self.assertFalse(good.is_error)
+
+    async def test_neutralized_context_is_validated(self) -> None:
+        result = await self._kit().call(
+            'slack_post_blocks',
+            {
+                'fallback_text': 'x',
+                'blocks': [
+                    {'type': 'context', 'elements': ['x' * 2993 + '<!here>']}
+                ],
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn('elements.0', result.text)
+        self.assertEqual(self.slack.calls, [])
+
+    async def test_connection_error(self) -> None:
+        await self.slack.__aexit__()
+        result = await self._kit().call('slack_post_markdown', {'text': 'a'})
+        self.assertTrue(result.is_error)
+        self.assertIn('cannot connect to Slack', result.text)
+
     async def test_slack_error(self) -> None:
         self.slack.responses['chat.postMessage'] = {
             'ok': False,

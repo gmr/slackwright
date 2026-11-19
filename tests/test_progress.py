@@ -30,6 +30,24 @@ class ReporterTestCase(unittest.IsolatedAsyncioTestCase):
             await reporter.start('a', 'Searching')
             await reporter.finish('a')
 
+    async def test_stream_error_is_ignored(self) -> None:
+        async with fake_slack.FakeSlack() as slack:
+            slack.responses['chat.startStream'] = {
+                'ok': False,
+                'error': 'not_allowed',
+            }
+            stream = render.Stream(slack.client, 'C1', '1.0', buffer_size=1)
+            reporter = progress.Reporter(
+                slack.client, 'C1', '1.0', stream=stream
+            )
+            await reporter.start('a', 'Searching')
+            await reporter.finish('a')
+
+    async def test_connection_error_is_ignored(self) -> None:
+        async with fake_slack.FakeSlack() as slack:
+            reporter = progress.Reporter(slack.client, 'C1', '1.0')
+        await reporter.start('a', 'Searching')
+
     async def test_stream_tasks(self) -> None:
         async with fake_slack.FakeSlack() as slack:
             stream = render.Stream(slack.client, 'C1', '1.0')

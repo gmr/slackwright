@@ -68,15 +68,15 @@ class ContextSpec(_Spec):
     """Small grey text, for notes and metadata."""
 
     type: typing.Literal['context']
-    elements: list[typing.Annotated[str, pydantic.Field(max_length=3000)]] = (
-        pydantic.Field(
-            min_length=1,
-            max_length=10,
-            description=(
-                'One to ten short texts in Slack mrkdwn: *bold*, _italic_, '
-                '<https://example.com|label>. Not standard Markdown.'
-            ),
-        )
+    elements: list[
+        typing.Annotated[str, pydantic.Field(min_length=1, max_length=3000)]
+    ] = pydantic.Field(
+        min_length=1,
+        max_length=10,
+        description=(
+            'One to ten short texts in Slack mrkdwn: *bold*, _italic_, '
+            '<https://example.com|label>. Not standard Markdown.'
+        ),
     )
 
     def to_block(self) -> dict[str, typing.Any]:

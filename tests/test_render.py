@@ -1,6 +1,9 @@
 import json
 import re
+import time
 import unittest
+
+from slack_sdk import errors
 
 from slackwright import render
 from tests import fake_slack
@@ -263,3 +266,59 @@ class StreamTestCase(unittest.IsolatedAsyncioTestCase):
             for chunk in self._chunks(payload)
         ]
         self.assertEqual(len(ids), render.STREAM_MAX_TASKS)
+
+    async def test_text_after_overflow_stays_in_order(self) -> None:
+        async with fake_slack.FakeSlack() as slack:
+            stream = render.Stream(slack.client, 'C1', '1.0')
+            await stream.text('a' * 11_000)
+            await stream.text('b' * 2_000)
+            await stream.text('c' * 500)
+            await stream.close()
+        self.assertEqual(
+            slack.payloads('chat.postMessage')[0]['markdown_text'],
+            'b' * 2_000 + 'c' * 500,
+        )
+
+    async def test_failed_overflow_post_is_retried(self) -> None:
+        async with fake_slack.FakeSlack() as slack:
+            slack.responses['chat.postMessage'] = [
+                {'ok': True, 'ts': '1.1'},
+                {'ok': False, 'error': 'ratelimited'},
+                {'ok': True, 'ts': '1.2'},
+            ]
+            stream = render.Stream(slack.client, 'C1', '1.0')
+            await stream.text('x' * 11_000)
+            await stream.text('a' * 8_000 + '\n\n' + 'b' * 8_000)
+            with self.assertRaises(errors.SlackApiError):
+                await stream.close()
+            self.assertEqual(await stream.close(), ['1.2'])
+        posted = [
+            p['markdown_text'] for p in slack.payloads('chat.postMessage')
+        ]
+        self.assertEqual(posted, ['a' * 8_000, 'b' * 8_000, 'b' * 8_000])
+
+    async def test_failed_stop_is_retried(self) -> None:
+        async with fake_slack.FakeSlack() as slack:
+            slack.responses['chat.stopStream'] = [
+                {'ok': False, 'error': 'internal_error'},
+                {'ok': True, 'ts': '1.1'},
+            ]
+            stream = render.Stream(slack.client, 'C1', '1.0')
+            await stream.task('t1', 'Search', 'in_progress')
+            with self.assertRaises(errors.SlackApiError):
+                await stream.close()
+            await stream.text('late')
+            await stream.close()
+        self.assertEqual(len(slack.payloads('chat.stopStream')), 2)
+        self.assertEqual(
+            slack.payloads('chat.postMessage')[0]['markdown_text'], 'late'
+        )
+
+
+class NeutralizeBroadcastsTimeTestCase(unittest.TestCase):
+    def test_many_carets_without_pipe(self) -> None:
+        text = '<!date^1^' + '^' * 100_000
+        started = time.monotonic()
+        result = render.neutralize_broadcasts(text)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertTrue(result.startswith('<\u200b!date'))

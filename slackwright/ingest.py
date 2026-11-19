@@ -37,6 +37,9 @@ SLACK_FILE_HOSTS = frozenset({'files.slack.com'})
 MAX_FILE_BYTES = 10 * 1024 * 1024
 """Largest file to download and give to the model."""
 
+MAX_IMAGE_BYTES = 7_500_000
+"""Largest image to give to the model. Base64 makes it about 10 MB."""
+
 DOWNLOAD_CONCURRENCY = 4
 """File downloads at the same time, for each message."""
 
@@ -58,6 +61,9 @@ BINARY_AMBIGUOUS_MIMETYPES = frozenset(
     {'application/force-download', 'application/octet-stream'}
 )
 
+_KEPT_SUBTYPES = frozenset({None, 'thread_broadcast'})
+"""Message subtypes that are turns. A reply sent to the channel too is
+a ``thread_broadcast``."""
 _MENTION_RE = re.compile(r'<@([A-Z0-9]+)(?:\|[^>]+)?>')
 _UNSAFE_URL_CHARS = re.compile(r'[\\\s\x00-\x1f\x7f]')
 
@@ -137,6 +143,11 @@ def file_to_block(mimetype: str, content: bytes) -> ContentBlock:
 
     """
     mimetype = mimetype.split(';', 1)[0].strip().lower()
+    if mimetype in IMAGE_MEDIA_TYPES and len(content) > MAX_IMAGE_BYTES:
+        return text_block(
+            'ERROR: the image is larger than the maximum of '
+            f'{MAX_IMAGE_BYTES:,} bytes.'
+        )
     if mimetype == 'application/pdf' or mimetype in IMAGE_MEDIA_TYPES:
         return {
             'type': 'document' if mimetype == 'application/pdf' else 'image',
@@ -191,7 +202,7 @@ async def download(
                         f'ERROR: the file is larger than the maximum of '
                         f'{max_bytes // (1024 * 1024)} MB.'
                     )
-    except httpx.HTTPError as error:
+    except (httpx.HTTPError, httpx.InvalidURL) as error:
         LOGGER.warning('Failed to download Slack file %s: %s', url, error)
         return None
     return file_to_block(mimetype, bytes(data))
@@ -282,9 +293,12 @@ async def thread(
         thread_ts: The ``ts`` of the thread's first message.
         bot_user_id: The bot's user ID. Its messages become
             ``assistant`` turns.
-        max_messages: Only the last ``max_messages`` are used.
+        max_messages: Only the last ``max_messages`` are used. Zero or
+            less gives no messages.
 
     """
+    if max_messages < 1:
+        return []
     messages = await replies(slack, channel_id, thread_ts)
     return await to_messages(
         slack, files_client, messages[-max_messages:], bot_user_id
@@ -309,7 +323,7 @@ async def to_messages(
     user_ids = {
         message['user']
         for message in messages
-        if message.get('user') and not message.get('subtype')
+        if message.get('user') and message.get('subtype') in _KEPT_SUBTYPES
     } | {
         match.group(1)
         for message in messages
@@ -322,7 +336,7 @@ async def to_messages(
     turns: list[tuple[str, list[ContentBlock]]] = []
     for message in messages:
         author = message.get('user')
-        if message.get('subtype') or not author:
+        if message.get('subtype') not in _KEPT_SUBTYPES or not author:
             continue
         text = (
             await replace_mentions(slack, message.get('text') or '', cache)
