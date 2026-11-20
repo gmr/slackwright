@@ -80,21 +80,15 @@ class NeutralizeBroadcastsTestCase(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(render.neutralize_broadcasts(text), expected)
 
-    def test_code_and_urls_are_unchanged(self) -> None:
-        for text in (
-            '`@here`',
-            '```\n@channel\n```',
-            'https://x.test/@here',
-            '<https://x.test/@everyone|link>',
+    def test_bare_words_in_code_and_urls(self) -> None:
+        for text, expected in (
+            ('`@here`', '`@\u200bhere`'),
+            ('\\`@here\\`', '\\`@\u200bhere\\`'),
+            ('```\n@channel\n```', '```\n@\u200bchannel\n```'),
+            ('https://)@here', 'https://)@\u200bhere'),
         ):
             with self.subTest(text=text):
-                self.assertEqual(render.neutralize_broadcasts(text), text)
-
-    def test_bare_word_next_to_code(self) -> None:
-        self.assertEqual(
-            render.neutralize_broadcasts('run `@here` then @here'),
-            'run `@here` then @\u200bhere',
-        )
+                self.assertEqual(render.neutralize_broadcasts(text), expected)
 
     def test_special_token_in_code_is_broken(self) -> None:
         self.assertEqual(

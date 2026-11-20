@@ -44,14 +44,12 @@ _ZWSP = '\u200b'
 # The format and the optional link share one field that can contain
 # ``^``. Two fields that both match ``^`` make the time quadratic.
 _SPECIAL = re.compile(r'<!(?!date\^\d+\^[^<>|]*\|[^<>]*>)')
-_CODE = r'```.*?```|`[^`\n]+`'
-# Code and URLs are matched first and kept as they are, so a bare word
-# in them does not change.
+# Bare words are blocked in code and URLs too. A regex cannot find
+# code and links exactly as Slack does, and a zero-width space there
+# costs less than a broadcast that gets through.
 _BARE_BROADCAST = re.compile(
-    rf'(?P<keep>{_CODE}|https?://[^\s<>]+)'
-    r'|(?<![A-Za-z0-9])@(?P<word>channel|here|everyone|group)'
-    r'(?![A-Za-z0-9])',
-    re.IGNORECASE | re.DOTALL,
+    r'(?<![A-Za-z0-9])@(channel|here|everyone|group)(?![A-Za-z0-9])',
+    re.IGNORECASE,
 )
 
 
@@ -63,10 +61,9 @@ def neutralize_broadcasts(text: str) -> str:
     ``<`` changes tokens such as ``<!channel>``, ``<!here>``, and
     ``<!subteam^ID|@label>`` into literal text. Also blocks the bare
     words ``@channel``, ``@here``, ``@everyone``, and ``@group`` in any
-    letter case with a zero-width space after the ``@``. These bare
-    words do not change in code or in a URL. User mentions such as
-    ``<@U123>`` and email addresses such as ``x@here.com`` do not
-    change.
+    letter case with a zero-width space after the ``@``, also in
+    code and URLs. User mentions such as ``<@U123>`` and email
+    addresses such as ``x@here.com`` do not change.
 
     The :class:`~slackwright.toolkit.Toolkit` calls this on agent text
     unless the bot sets ``allow_broadcasts``. :func:`post_markdown` does
@@ -75,9 +72,7 @@ def neutralize_broadcasts(text: str) -> str:
 
     """
     text = _SPECIAL.sub(f'<{_ZWSP}!', text)
-    return _BARE_BROADCAST.sub(
-        lambda m: m['keep'] or f'@{_ZWSP}{m["word"]}', text
-    )
+    return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
 
 
 _MRKDWN_RULES = (
@@ -91,7 +86,7 @@ _MRKDWN_RULES = (
 # placeholders before the rules run, and come back after. A link
 # destination can contain one level of balanced parentheses.
 _PROTECTED = re.compile(
-    rf'(?P<code>{_CODE})'
+    r'(?P<code>```.*?```|`[^`\n]+`)'
     r'|\[(?P<label>[^\]\n]+)\]'
     r'\((?P<url>https?://(?:[^()\s|]|\([^()\s|]*\))+)\)',
     re.DOTALL,
