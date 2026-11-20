@@ -50,6 +50,20 @@ result = await toolkit.call(name, tool_input)   # run a tool_use block
 
 See [docs/design.md](docs/design.md) for the design.
 
+## Development
+
+```bash
+uv sync --all-groups
+docker compose up -d --wait   # Valkey and PostgreSQL for integration tests
+uv run pre-commit run --all-files
+uv run coverage run
+uv run coverage report
+```
+
+Without the compose services, the Valkey and PostgreSQL tests are
+skipped. When `VALKEY_URL` or `POSTGRES_URL` is set (CI sets both),
+those tests always run against that URL.
+
 ## License
 
 BSD 3-Clause. See [LICENSE](LICENSE).

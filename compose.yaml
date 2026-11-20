@@ -1,0 +1,26 @@
+# Backing services for the integration tests:
+#
+#   docker compose up -d --wait
+#   uv run coverage run
+#
+# The tests use these ports when VALKEY_URL and POSTGRES_URL are not set.
+# CI starts the same images as GitHub Actions service containers.
+services:
+  valkey:
+    image: valkey/valkey:8
+    ports: ["56379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports: ["55432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
