@@ -5,7 +5,7 @@ import pydantic
 
 from slackwright import blocks as block_specs
 from slackwright import forms
-from tests import fake_slack
+from tests import fake_slack, services
 
 
 def spec(**overrides: typing.Any) -> forms.FormSpec:
@@ -322,7 +322,8 @@ class ConvertTestCase(unittest.TestCase):
 class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.slack = await fake_slack.FakeSlack().__aenter__()
-        self.store = forms.MemoryFormStore()
+        self.addAsyncCleanup(self.slack.__aexit__)
+        self.store = await self.make_store()
         self.submissions: list[forms.Submission] = []
 
         async def on_submit(submission: forms.Submission) -> None:
@@ -330,8 +331,8 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.runtime = forms.Runtime(self.store, on_submit)
 
-    async def asyncTearDown(self) -> None:
-        await self.slack.__aexit__()
+    async def make_store(self) -> forms.FormStore:
+        return forms.MemoryFormStore()
 
     async def post(self, **overrides: typing.Any) -> forms.FormRecord:
         return await self.runtime.post(
@@ -671,3 +672,19 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(forms.ACTION_PATTERN.match(forms.ACTION_OPEN))
         self.assertFalse(forms.ACTION_PATTERN.match('value'))
+
+
+@services.requires_valkey
+class ValkeyRuntimeTestCase(RuntimeTestCase):
+    """The runtime tests again, with forms kept in Valkey."""
+
+    async def make_store(self) -> forms.FormStore:
+        return await services.valkey_store(self)
+
+
+@services.requires_postgres
+class PostgresRuntimeTestCase(RuntimeTestCase):
+    """The runtime tests again, with forms kept in PostgreSQL."""
+
+    async def make_store(self) -> forms.FormStore:
+        return await services.postgres_store(self)

@@ -1,21 +1,18 @@
 """One test suite for every form store.
 
-The Valkey and PostgreSQL tests run when ``VALKEY_URL`` and
-``POSTGRES_URL`` are set (CI sets them), and are skipped otherwise.
+The Valkey and PostgreSQL tests need the services in ``compose.yaml``;
+see ``tests/services.py``.
 
 """
 
 import asyncio
-import os
 import time
 import typing
 import unittest
 import uuid
 
-from slackwright import forms, stores
-
-VALKEY_URL = os.environ.get('VALKEY_URL')
-POSTGRES_URL = os.environ.get('POSTGRES_URL')
+from slackwright import forms
+from tests import services
 
 
 def record(form_id: str) -> forms.FormRecord:
@@ -92,45 +89,17 @@ class MemoryFormStoreTestCase(StoreTests, unittest.IsolatedAsyncioTestCase):
         self.store = forms.MemoryFormStore()
 
 
-@unittest.skipUnless(VALKEY_URL, 'VALKEY_URL is not set')
+@services.requires_valkey
 class ValkeyFormStoreTestCase(StoreTests, unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        from valkey import asyncio as valkey
-
-        self.client = valkey.Valkey.from_url(str(VALKEY_URL))
-        self.store = stores.ValkeyFormStore(
-            self.client, prefix=f'test:{uuid.uuid4().hex}:'
-        )
-
-    async def asyncTearDown(self) -> None:
-        await self.client.aclose()
+        self.store = await services.valkey_store(self)
 
 
-@unittest.skipUnless(POSTGRES_URL, 'POSTGRES_URL is not set')
+@services.requires_postgres
 class PostgresFormStoreTestCase(StoreTests, unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        import psycopg_pool
-
-        self.pool = psycopg_pool.AsyncConnectionPool(
-            str(POSTGRES_URL), open=False
-        )
-        await self.pool.open()
-        self.addAsyncCleanup(self.pool.close)
-        suffix = uuid.uuid4().hex[:8]
-        self.store = stores.PostgresFormStore(
-            self.pool,
-            forms_table=f'forms_{suffix}',
-            claims_table=f'claims_{suffix}',
-        )
-        # Cleanups run in reverse order, so the drop runs before close.
-        self.addAsyncCleanup(self._drop, f'forms_{suffix}', f'claims_{suffix}')
-        await self.store.create_schema()
+        self.store = await services.postgres_store(self)
         await self.store.create_schema()  # a second call does nothing
-
-    async def _drop(self, *tables: str) -> None:
-        async with self.pool.connection() as conn:
-            for table in tables:
-                await conn.execute(f'DROP TABLE IF EXISTS {table}')
 
     async def test_purge_expired(self) -> None:
         await self.store.put(record('old'), 1)
