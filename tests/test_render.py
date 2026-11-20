@@ -80,6 +80,21 @@ class NeutralizeBroadcastsTestCase(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(render.neutralize_broadcasts(text), expected)
 
+    def test_bare_words_in_code_and_urls(self) -> None:
+        for text, expected in (
+            ('`@here`', '`@\u200bhere`'),
+            ('\\`@here\\`', '\\`@\u200bhere\\`'),
+            ('```\n@channel\n```', '```\n@\u200bchannel\n```'),
+            ('https://)@here', 'https://)@\u200bhere'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(render.neutralize_broadcasts(text), expected)
+
+    def test_special_token_in_code_is_broken(self) -> None:
+        self.assertEqual(
+            render.neutralize_broadcasts('`<!here>`'), '`<\u200b!here>`'
+        )
+
     def test_other_text_is_unchanged(self) -> None:
         for text in (
             '<@U123> hi',
@@ -115,6 +130,82 @@ class SplitMarkdownTestCase(unittest.TestCase):
         self.assertEqual(joined.count('## Section'), 24)
         table = next(part for part in parts if '| row-0 |' in part)
         self.assertIn('| row-199 |', table)
+
+    def test_link_definitions_follow_their_links(self) -> None:
+        filler = 'x' * 60
+        text = '\n\n'.join(
+            [
+                'See [the docs][Docs] first.',
+                *[filler] * 3,
+                'Then read [the guide].',
+                '[docs]: https://docs.test\n'
+                '[The  Guide]: https://guide.test\n'
+                '    "Guide title"',
+            ]
+        )
+        parts = render.split_markdown(text, limit=120)
+        self.assertGreater(len(parts), 1)
+        for part in parts:
+            self.assertLessEqual(len(part), 120)
+        self.assertIn('[docs]: https://docs.test', parts[0])
+        self.assertNotIn('guide.test', parts[0])
+        self.assertTrue(
+            parts[-1].startswith(
+                '[The  Guide]: https://guide.test\n    "Guide title"'
+            )
+        )
+        self.assertNotIn('docs.test', parts[-1])
+
+    def test_many_definitions_split_fast(self) -> None:
+        definitions = '\n'.join(
+            f'[d{i}]: https://x.test/{i}' for i in range(200)
+        )
+        text = '\n\n'.join(
+            [*(f'block {i} [x][d{i % 200}]' for i in range(5000)), definitions]
+        )
+        start = time.perf_counter()
+        parts = render.split_markdown(text)
+        self.assertLess(time.perf_counter() - start, 2)
+        for part in parts:
+            self.assertLessEqual(len(part), render.MARKDOWN_LIMIT)
+        self.assertIn('[d7]: https://x.test/7', parts[0])
+
+    def test_padded_label_keeps_its_definition(self) -> None:
+        text = '\n\n'.join(
+            ['See [manual][ docs ].', 'z' * 40, '[docs]: https://docs.test']
+        )
+        parts = render.split_markdown(text, limit=60)
+        self.assertIn('[docs]: https://docs.test', parts[0])
+
+    def test_unicode_case_label_keeps_its_definition(self) -> None:
+        text = '\n\n'.join(['See [ẞ].', 'z' * 60, '[ẞ]: https://x.test'])
+        parts = render.split_markdown(text, limit=60)
+        self.assertIn('[ẞ]: https://x.test', parts[0])
+
+    def test_space_after_escaped_bracket_keeps_its_definition(self) -> None:
+        text = '\n\n'.join(
+            [r'See [a\[ b].', 'z' * 60, r'[a\[ b]: https://x.test']
+        )
+        parts = render.split_markdown(text, limit=60)
+        self.assertIn(r'[a\[ b]: https://x.test', parts[0])
+
+    def test_line_separator_does_not_split_definition(self) -> None:
+        definition = '[x]: https://x.test "a\u2028b"'
+        text = '\n\n'.join(['See [x].', 'z' * 40, definition])
+        parts = render.split_markdown(text, limit=60)
+        self.assertTrue(parts[0].startswith(definition))
+
+    def test_definition_stays_out_of_unclosed_fence(self) -> None:
+        text = 'z' * 60 + '\n\n[x]: https://x.test\n\nSee [x].\n\n~~~\ncode'
+        parts = render.split_markdown(text, limit=60)
+        self.assertEqual(
+            parts[1], '[x]: https://x.test\n\nSee [x].\n\n~~~\ncode'
+        )
+
+    def test_unused_definition_is_dropped(self) -> None:
+        text = '\n\n'.join(['a' * 80, 'b' * 80, '[x]: https://x.test'])
+        parts = render.split_markdown(text, limit=100)
+        self.assertEqual(parts, ['a' * 80, 'b' * 80])
 
     def test_block_over_limit_is_one_part(self) -> None:
         code = '```\n' + 'x' * (render.MARKDOWN_LIMIT + 10) + '\n```'

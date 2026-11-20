@@ -65,9 +65,10 @@ BINARY_AMBIGUOUS_MIMETYPES = frozenset(
     {'application/force-download', 'application/octet-stream'}
 )
 
-_KEPT_SUBTYPES = frozenset({None, 'thread_broadcast'})
-"""Message subtypes that are turns. A reply sent to the channel too is
-a ``thread_broadcast``."""
+_KEPT_SUBTYPES = frozenset({None, 'file_share', 'thread_broadcast'})
+"""Message subtypes that are turns. A message with an uploaded file can
+be a ``file_share``. A reply sent to the channel too is a
+``thread_broadcast``."""
 _MENTION_RE = re.compile(r'<@([A-Z0-9]+)(?:\|[^>]+)?>')
 _UNSAFE_URL_CHARS = re.compile(r'[\\\s\x00-\x1f\x7f]')
 

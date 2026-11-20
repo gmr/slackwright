@@ -208,6 +208,8 @@ agent gets, so the tests check that each field has a description.
 3. If the text is longer, split it at top-level block boundaries
    (markdown-it tokens) into parts of 12,000 characters or fewer. Never
    split inside a code block or a table. Post each part as one message.
+   Each part gets a copy of the link reference definitions
+   (`[label]: url`) that its links use.
 4. If one block alone is longer than 12,000 characters (for example, a
    very long code block), upload it as a file snippet.
 
