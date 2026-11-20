@@ -10,6 +10,7 @@ the 12,000-character limit.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
@@ -69,6 +70,50 @@ def neutralize_broadcasts(text: str) -> str:
     """
     text = _SPECIAL.sub(f'<{_ZWSP}!', text)
     return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
+
+
+_MRKDWN_RULES = (
+    (re.compile(r'^#{1,6}[ \t]+(.+?)[ \t#]*$', re.MULTILINE), r'**\1**'),
+    (re.compile(r'^([ \t]*)[-*+][ \t]+', re.MULTILINE), '\\1• '),
+    (re.compile(r'(?<![*\w])\*(?!\*)([^*\n]+?)\*(?![*\w])'), r'_\1_'),
+    (re.compile(r'\*\*(.+?)\*\*|__(.+?)__'), r'*\1\2*'),
+    (re.compile(r'~~(.+?)~~'), r'~\1~'),
+)
+# Code and link destinations must not change. They go out as
+# placeholders before the rules run, and come back after. A link
+# destination can contain one level of balanced parentheses.
+_PROTECTED = re.compile(
+    r'(?P<code>```.*?```|`[^`\n]+`)'
+    r'|\[(?P<label>[^\]\n]+)\]'
+    r'\((?P<url>https?://(?:[^()\s|]|\([^()\s|]*\))+)\)',
+    re.DOTALL,
+)
+_PLACEHOLDER = re.compile('\x00(\\d+)\x00')
+
+
+def to_mrkdwn(markdown: str) -> str:
+    """Convert simple Markdown to Slack mrkdwn, for places that need it.
+
+    Use it only where Slack does not render Markdown, such as a modal
+    ``section`` block. Handles headings, bullet lists, bold, italic,
+    strikethrough, and links. ``&``, ``<``, and ``>`` are escaped first,
+    so the text cannot make a mention or a special token.
+
+    """
+    saved: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        saved.append(match['code'] or match['url'])
+        placeholder = f'\x00{len(saved) - 1}\x00'
+        if match['code']:
+            return placeholder
+        return f'<{placeholder}|{match["label"]}>'
+
+    text = html.escape(markdown.replace('\x00', ''), quote=False)
+    text = _PROTECTED.sub(protect, text)
+    for pattern, replacement in _MRKDWN_RULES:
+        text = pattern.sub(replacement, text)
+    return _PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], text)
 
 
 def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:

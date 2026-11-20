@@ -138,8 +138,9 @@ toolkit = slackwright.Toolkit(
     team_id='T123',
     forms=form_runtime,         # optional; enables slack_create_form
     can_post=None,              # optional access check, see 4.3
-    max_posts=5,                # per Toolkit (per turn)
-    max_forms=1,
+    max_posts=5,                # writes per Toolkit (per turn)
+    max_forms=1,                # forms per Toolkit (per turn)
+    canvases=False,             # True adds the three canvas tools
 )
 
 toolkit.anthropic()             # list of {'name', 'description', 'input_schema'}
@@ -301,19 +302,30 @@ form_runtime = slackwright.forms.Runtime(
 form_runtime.register(bolt_app)   # adds action and view handlers
 ```
 
+The button listener does its work after `ack()`. The modal listener
+must read and claim the form in the store before `ack()`, because the
+`ack()` response can carry `response_action`. Those two store calls
+count against Slack's 3-second limit. The message update and
+`on_submit` run after `ack()`. Bolt sends the acknowledgement first
+when `process_before_response` is `False` (the default), so
+`on_submit` can take longer than Slack's 3-second limit. A bot that sets `process_before_response=True` (for
+example, on AWS Lambda) must keep `on_submit` short.
+
 `FormStore` protocol:
 
 ```python
 class FormStore(Protocol):
     async def put(self, record: FormRecord, ttl: int) -> None: ...
     async def get(self, form_id: str) -> FormRecord | None: ...
-    async def claim(self, form_id: str, user_id: str) -> bool: ...
+    async def claim(self, key: str, ttl: int) -> bool: ...
 ```
 
 `claim()` is atomic (for example, Redis `SET NX`). It returns `False`
-if the key is already claimed. The key is `form_id` when
-`single_submission` is set, and `(form_id, user_id)` when it is not.
-The second key stops a double-click from making two submissions. slackwright ships
+if the key is already claimed and the claim has not expired. The
+runtime builds the key: `form_id` when `single_submission` is set,
+and `form_id:user_id` when it is not. The second key stops a
+double-click from making two submissions.
+
 slackwright ships three stores:
 
 | Store | Install | Backend |
@@ -330,8 +342,10 @@ not open or close connections itself.
   configurable prefix (default `slackwright:form:`).
 - **PostgreSQL:** two tables, `slackwright_forms (form_id PK, record
   JSONB, expires_at)` and `slackwright_form_claims (claim_key PK,
-  form_id, claimed_at)`. `claim` is `INSERT ... ON CONFLICT DO NOTHING`
-  and checks the row count. `get` ignores rows past `expires_at`.
+  expires_at)`. `claim` is `INSERT ... ON CONFLICT DO UPDATE ... WHERE
+  expires_at <= now()`, so an expired claim is replaced and a live
+  claim is kept; it checks the row count. `get` ignores rows past
+  `expires_at`.
   `await store.create_schema()` runs `CREATE TABLE IF NOT EXISTS`, and
   `await store.purge_expired()` deletes old rows; the bot calls it on a
   schedule. Table names are configurable.
@@ -362,10 +376,10 @@ slackwright interactions.
    3. Calls `claim()`. If it returns `False`, it returns
       `response_action: update` with an "Already submitted" view.
    4. Acknowledges.
-5. In a tracked background task (`inflight`), it updates the original
-   message to "Submitted by @user" and runs `on_submit`. If the update
-   fails (for example, the message was deleted), it still runs
-   `on_submit`.
+5. Inside `inflight.track()`, it updates the original message to
+   "Answered by @user" (when `single_submission` is set) and runs
+   `on_submit`. If the update fails (for example, the message was
+   deleted), it still runs `on_submit`.
 
 ### 7.4 Inline flow
 
@@ -378,8 +392,11 @@ slackwright interactions.
    slackwright checks required fields itself.
 4. On an error, Slack cannot show field errors in a message. The
    handler posts an ephemeral message to that user with the errors.
-5. On success: `claim()`, replace the inputs with a read-only summary,
-   and run `on_submit`.
+5. On success: `claim()`, then replace the inputs with a read-only
+   summary (when `single_submission` is set) or send the user an
+   ephemeral "Thanks" (when it is not), and run `on_submit`. The
+   summary shows user answers as `plain_text`, so they cannot make
+   links, formatting, or mentions.
 
 ### 7.5 Expired forms
 
@@ -429,7 +446,13 @@ instructions, in that turn.
 - `read(canvas_id)`: `canvases.getContent` with
   `content_type=markdown`.
 
-Required scopes: `canvases:read`, `canvases:write`.
+Required scopes: `canvases:read`, `canvases:write`, and `files:read`
+(for the share check, which uses `files.info`).
+
+The canvas tools are opt-in (`Toolkit(canvases=True)`), so a bot
+without these scopes does not show the agent tools that fail. A
+canvas that the toolkit created in this turn needs no share check.
+Canvas creates and edits count against `max_posts`.
 
 The Markdown that goes into a canvas is standard Markdown. No mrkdwn
 conversion is necessary.

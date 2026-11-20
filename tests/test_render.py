@@ -350,3 +350,28 @@ class NeutralizeBroadcastsTimeTestCase(unittest.TestCase):
         result = render.neutralize_broadcasts(text)
         self.assertLess(time.monotonic() - started, 1)
         self.assertTrue(result.startswith('<\u200b!date'))
+
+
+class ToMrkdwnTestCase(unittest.TestCase):
+    def test_convert(self) -> None:
+        self.assertEqual(
+            render.to_mrkdwn(
+                '# Plan\n- **bold** and *italic* and ~~gone~~\n'
+                '* [docs](https://a.example/x?a=1&b=2) <!here> <@U1>'
+            ),
+            '*Plan*\n• *bold* and _italic_ and ~gone~\n'
+            '• <https://a.example/x?a=1&amp;b=2|docs> &lt;!here&gt; '
+            '&lt;@U1&gt;',
+        )
+
+    def test_code_and_link_destinations_do_not_change(self) -> None:
+        self.assertEqual(
+            render.to_mrkdwn(
+                'Run `echo "**hi**"` and see [**docs**]'
+                '(https://a.example/a**b**_(c)).\n'
+                '```\n# not a heading\n- **x**\n```'
+            ),
+            'Run `echo "**hi**"` and see '
+            '<https://a.example/a**b**_(c)|*docs*>.\n'
+            '```\n# not a heading\n- **x**\n```',
+        )

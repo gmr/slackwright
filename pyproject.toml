@@ -42,6 +42,14 @@ dependencies = [
 Homepage = "https://github.com/gmr/slackwright"
 "Bug Tracker" = "https://github.com/gmr/slackwright/issues"
 
+[project.optional-dependencies]
+valkey = [
+    "valkey>=6",
+]
+postgres = [
+    "psycopg[pool]>=3.2",
+]
+
 [dependency-groups]
 dev = [
     "basedpyright",
@@ -49,7 +57,9 @@ dev = [
     "coverage[toml]",
     "mypy",
     "pre-commit",
+    "psycopg[binary,pool]>=3.2",
     "ruff",
+    "valkey>=6",
 ]
 
 [[tool.uv.index]]
