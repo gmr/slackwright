@@ -140,7 +140,9 @@ async def shared_with(slack: typing.Any, canvas_id: str) -> set[str]:
     response = await slack.files_info(file=canvas_id)
     file = response.get('file') or {}
     shares = file.get('shares') or {}
+    linked = file.get('linked_channel_id')
     return {
+        *([linked] if linked else []),
         *(file.get('channels') or []),
         *(file.get('groups') or []),
         *(file.get('ims') or []),

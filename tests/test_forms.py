@@ -632,6 +632,21 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(self.submissions), 1)
 
+    async def test_on_submit_failure_tells_the_user(self) -> None:
+        async def on_submit(submission: forms.Submission) -> None:
+            raise RuntimeError('boom')
+
+        runtime = forms.Runtime(self.store, on_submit)
+        record = await self.post()
+        with self.assertLogs('slackwright.forms', 'ERROR'):
+            await runtime.handle_view(
+                Ack(), self.submit(record.form_id, GOOD), self.slack.client
+            )
+        self.assertIn(
+            'processing failed',
+            self.slack.payloads('chat.postEphemeral')[0]['text'],
+        )
+
     def test_register(self) -> None:
         registered: list[tuple[str, typing.Any, typing.Any]] = []
 

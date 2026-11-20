@@ -115,17 +115,22 @@ class PostgresFormStoreTestCase(StoreTests, unittest.IsolatedAsyncioTestCase):
             str(POSTGRES_URL), open=False
         )
         await self.pool.open()
+        self.addAsyncCleanup(self.pool.close)
         suffix = uuid.uuid4().hex[:8]
         self.store = stores.PostgresFormStore(
             self.pool,
             forms_table=f'forms_{suffix}',
             claims_table=f'claims_{suffix}',
         )
+        # Cleanups run in reverse order, so the drop runs before close.
+        self.addAsyncCleanup(self._drop, f'forms_{suffix}', f'claims_{suffix}')
         await self.store.create_schema()
         await self.store.create_schema()  # a second call does nothing
 
-    async def asyncTearDown(self) -> None:
-        await self.pool.close()
+    async def _drop(self, *tables: str) -> None:
+        async with self.pool.connection() as conn:
+            for table in tables:
+                await conn.execute(f'DROP TABLE IF EXISTS {table}')
 
     async def test_purge_expired(self) -> None:
         await self.store.put(record('old'), 1)

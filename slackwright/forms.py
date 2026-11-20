@@ -6,10 +6,13 @@ the inputs in the message (``mode='inline'``), and handles the Slack
 interactions. When a user submits valid answers, the runtime calls the
 bot's ``on_submit`` callback with a :class:`Submission`.
 
-The runtime does its work in the Bolt listener after ``ack()``. Bolt
-sends the acknowledgement first when ``process_before_response`` is
-``False`` (the default), so slow work does not pass Slack's 3-second
-limit.
+The button listener does its work after ``ack()``. The modal listener
+reads and claims the form in the store before ``ack()``, because the
+``ack()`` response can carry ``response_action``, so those store calls
+count against Slack's 3-second limit. The message update and
+``on_submit`` run after ``ack()``. Bolt sends the acknowledgement
+first when ``process_before_response`` is ``False`` (the default), so
+that slow work does not pass the limit.
 
 """
 
@@ -23,6 +26,7 @@ import secrets
 import time
 import typing
 
+import aiohttp
 import pydantic
 from slack_sdk import errors
 
@@ -762,26 +766,41 @@ class Runtime:
                         blocks=_answered_blocks(record, user_id, values),
                         text=f'Form: {record.spec.title} (answered)',
                     )
-                except errors.SlackApiError as error:
+                except (
+                    errors.SlackApiError,
+                    aiohttp.ClientError,
+                    TimeoutError,
+                ) as error:
+                    # The update is cosmetic. Deliver the answers anyway.
                     LOGGER.warning(
-                        'Could not update form %s: %s',
-                        record.form_id,
-                        error.response.get('error'),
+                        'Could not update form %s: %r', record.form_id, error
                     )
             elif record.spec.mode == 'inline':
                 await _ephemeral(
                     client, record, user_id, 'Thanks. Your answers were sent.'
                 )
-            await self._on_submit(
-                Submission(
-                    form_id=record.form_id,
-                    spec=record.spec,
-                    values=values,
-                    user_id=user_id,
-                    channel_id=record.channel_id,
-                    thread_ts=record.thread_ts,
-                )
+            submission = Submission(
+                form_id=record.form_id,
+                spec=record.spec,
+                values=values,
+                user_id=user_id,
+                channel_id=record.channel_id,
+                thread_ts=record.thread_ts,
             )
+            # ponytail: the claim stays held after a failure, so the
+            # user cannot submit again; add FormStore.release for retry.
+            try:
+                await self._on_submit(submission)
+            except Exception:
+                LOGGER.exception(
+                    'on_submit failed for form %s', record.form_id
+                )
+                await _ephemeral(
+                    client,
+                    record,
+                    user_id,
+                    'Your answers were received, but processing failed.',
+                )
 
 
 def _parse(

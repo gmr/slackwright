@@ -500,6 +500,18 @@ class FeatureCallTestCase(unittest.IsolatedAsyncioTestCase):
             intros, ['<\u200b!here> pick one', '<!here> pick one']
         )
 
+    async def test_neutralized_form_intro_is_validated(self) -> None:
+        kit = self._kit()
+        bad = await kit.call(
+            'slack_create_form', FORM | {'intro': 'a' * 1993 + '<!here>'}
+        )
+        self.assertTrue(bad.is_error)
+        self.assertIn('intro', bad.text)
+        self.assertEqual(self.slack.calls, [])
+        # The rejected form did not use up the form limit.
+        good = await kit.call('slack_create_form', FORM)
+        self.assertFalse(good.is_error, good.text)
+
     async def test_canvas_check_is_remembered(self) -> None:
         self.slack.responses['files.info'] = {
             'ok': True,

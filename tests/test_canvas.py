@@ -128,12 +128,13 @@ class CanvasTestCase(unittest.IsolatedAsyncioTestCase):
                     'channels': ['C1'],
                     'groups': ['G1'],
                     'shares': {'public': {'C2': []}, 'private': {'G2': []}},
+                    'linked_channel_id': 'C3',
                 },
             }
             self.assertEqual(await canvas.read(slack.client, 'F1'), '# Doc')
             self.assertEqual(
                 await canvas.shared_with(slack.client, 'F1'),
-                {'C1', 'G1', 'C2', 'G2'},
+                {'C1', 'G1', 'C2', 'G2', 'C3'},
             )
         self.assertEqual(
             slack.payloads('canvases.getContent'),

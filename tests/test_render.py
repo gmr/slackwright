@@ -363,3 +363,15 @@ class ToMrkdwnTestCase(unittest.TestCase):
             '• <https://a.example/x?a=1&amp;b=2|docs> &lt;!here&gt; '
             '&lt;@U1&gt;',
         )
+
+    def test_code_and_link_destinations_do_not_change(self) -> None:
+        self.assertEqual(
+            render.to_mrkdwn(
+                'Run `echo "**hi**"` and see [**docs**]'
+                '(https://a.example/a**b**_(c)).\n'
+                '```\n# not a heading\n- **x**\n```'
+            ),
+            'Run `echo "**hi**"` and see '
+            '<https://a.example/a**b**_(c)|*docs*>.\n'
+            '```\n# not a heading\n- **x**\n```',
+        )

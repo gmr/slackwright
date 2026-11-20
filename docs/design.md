@@ -139,9 +139,8 @@ toolkit = slackwright.Toolkit(
     forms=form_runtime,         # optional; enables slack_create_form
     can_post=None,              # optional access check, see 4.3
     max_posts=5,                # writes per Toolkit (per turn)
-    max_forms=1,
+    max_forms=1,                # forms per Toolkit (per turn)
     canvases=False,             # True adds the three canvas tools
-    max_forms=1,
 )
 
 toolkit.anthropic()             # list of {'name', 'description', 'input_schema'}
@@ -303,10 +302,13 @@ form_runtime = slackwright.forms.Runtime(
 form_runtime.register(bolt_app)   # adds action and view handlers
 ```
 
-The listeners do their work after `ack()`, in the same listener.
-Bolt sends the acknowledgement first when `process_before_response`
-is `False` (the default), so `on_submit` can take longer than Slack's
-3-second limit. A bot that sets `process_before_response=True` (for
+The button listener does its work after `ack()`. The modal listener
+must read and claim the form in the store before `ack()`, because the
+`ack()` response can carry `response_action`. Those two store calls
+count against Slack's 3-second limit. The message update and
+`on_submit` run after `ack()`. Bolt sends the acknowledgement first
+when `process_before_response` is `False` (the default), so
+`on_submit` can take longer than Slack's 3-second limit. A bot that sets `process_before_response=True` (for
 example, on AWS Lambda) must keep `on_submit` short.
 
 `FormStore` protocol:

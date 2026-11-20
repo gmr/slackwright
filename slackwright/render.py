@@ -78,8 +78,17 @@ _MRKDWN_RULES = (
     (re.compile(r'(?<![*\w])\*(?!\*)([^*\n]+?)\*(?![*\w])'), r'_\1_'),
     (re.compile(r'\*\*(.+?)\*\*|__(.+?)__'), r'*\1\2*'),
     (re.compile(r'~~(.+?)~~'), r'~\1~'),
-    (re.compile(r'\[([^\]\n]+)\]\((https?://[^)\s|>]+)\)'), r'<\2|\1>'),
 )
+# Code and link destinations must not change. They go out as
+# placeholders before the rules run, and come back after. A link
+# destination can contain one level of balanced parentheses.
+_PROTECTED = re.compile(
+    r'(?P<code>```.*?```|`[^`\n]+`)'
+    r'|\[(?P<label>[^\]\n]+)\]'
+    r'\((?P<url>https?://(?:[^()\s|]|\([^()\s|]*\))+)\)',
+    re.DOTALL,
+)
+_PLACEHOLDER = re.compile('\x00(\\d+)\x00')
 
 
 def to_mrkdwn(markdown: str) -> str:
@@ -91,10 +100,20 @@ def to_mrkdwn(markdown: str) -> str:
     so the text cannot make a mention or a special token.
 
     """
-    text = html.escape(markdown, quote=False)
+    saved: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        saved.append(match['code'] or match['url'])
+        placeholder = f'\x00{len(saved) - 1}\x00'
+        if match['code']:
+            return placeholder
+        return f'<{placeholder}|{match["label"]}>'
+
+    text = html.escape(markdown.replace('\x00', ''), quote=False)
+    text = _PROTECTED.sub(protect, text)
     for pattern, replacement in _MRKDWN_RULES:
         text = pattern.sub(replacement, text)
-    return text
+    return _PLACEHOLDER.sub(lambda m: saved[int(m.group(1))], text)
 
 
 def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:

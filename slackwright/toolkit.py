@@ -374,7 +374,10 @@ class Toolkit:
             values.model_dump(exclude={'channel_id'})
         )
         if spec.intro:
-            spec = spec.model_copy(update={'intro': self._safe(spec.intro)})
+            # Validate again: neutralizing can make the intro too long.
+            spec = forms.FormSpec.model_validate(
+                {**spec.model_dump(), 'intro': self._safe(spec.intro)}
+            )
         self._reserve(1)
         self._form_count += 1
         record = await self._forms.post(
