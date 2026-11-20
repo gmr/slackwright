@@ -272,3 +272,19 @@ class ThreadTestCase(unittest.IsolatedAsyncioTestCase):
             messages[0]['content'],
             '<@U1> [ts=1] hi\n\n<@U1> [ts=2] also',
         )
+
+    async def test_file_share_is_kept(self) -> None:
+        replies = [
+            {'user': 'U1', 'text': 'hi', 'ts': '1'},
+            {
+                'user': 'U1',
+                'text': 'see this',
+                'ts': '2',
+                'subtype': 'file_share',
+            },
+        ]
+        messages, _ = await self._thread(replies, 50)
+        self.assertEqual(
+            messages[0]['content'],
+            '<@U1> [ts=1] hi\n\n<@U1> [ts=2] see this',
+        )

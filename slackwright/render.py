@@ -44,9 +44,14 @@ _ZWSP = '\u200b'
 # The format and the optional link share one field that can contain
 # ``^``. Two fields that both match ``^`` make the time quadratic.
 _SPECIAL = re.compile(r'<!(?!date\^\d+\^[^<>|]*\|[^<>]*>)')
+_CODE = r'```.*?```|`[^`\n]+`'
+# Code and URLs are matched first and kept as they are, so a bare word
+# in them does not change.
 _BARE_BROADCAST = re.compile(
-    r'(?<![A-Za-z0-9])@(channel|here|everyone|group)(?![A-Za-z0-9])',
-    re.IGNORECASE,
+    rf'(?P<keep>{_CODE}|https?://[^\s<>]+)'
+    r'|(?<![A-Za-z0-9])@(?P<word>channel|here|everyone|group)'
+    r'(?![A-Za-z0-9])',
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -58,9 +63,10 @@ def neutralize_broadcasts(text: str) -> str:
     ``<`` changes tokens such as ``<!channel>``, ``<!here>``, and
     ``<!subteam^ID|@label>`` into literal text. Also blocks the bare
     words ``@channel``, ``@here``, ``@everyone``, and ``@group`` in any
-    letter case with a zero-width space after the ``@``. User mentions
-    such as ``<@U123>`` and email addresses such as ``x@here.com`` do
-    not change.
+    letter case with a zero-width space after the ``@``. These bare
+    words do not change in code or in a URL. User mentions such as
+    ``<@U123>`` and email addresses such as ``x@here.com`` do not
+    change.
 
     The :class:`~slackwright.toolkit.Toolkit` calls this on agent text
     unless the bot sets ``allow_broadcasts``. :func:`post_markdown` does
@@ -69,7 +75,9 @@ def neutralize_broadcasts(text: str) -> str:
 
     """
     text = _SPECIAL.sub(f'<{_ZWSP}!', text)
-    return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
+    return _BARE_BROADCAST.sub(
+        lambda m: m['keep'] or f'@{_ZWSP}{m["word"]}', text
+    )
 
 
 _MRKDWN_RULES = (
@@ -83,7 +91,7 @@ _MRKDWN_RULES = (
 # placeholders before the rules run, and come back after. A link
 # destination can contain one level of balanced parentheses.
 _PROTECTED = re.compile(
-    r'(?P<code>```.*?```|`[^`\n]+`)'
+    rf'(?P<code>{_CODE})'
     r'|\[(?P<label>[^\]\n]+)\]'
     r'\((?P<url>https?://(?:[^()\s|]|\([^()\s|]*\))+)\)',
     re.DOTALL,
@@ -128,26 +136,56 @@ def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:
     if len(text) <= limit:
         return [text] if text else []
     lines = text.splitlines()
-    # ponytail: link reference definitions are not tokens and are lost
-    # when a long answer is split; LLM output rarely uses them.
-    blocks = [
-        '\n'.join(lines[token.map[0] : token.map[1]]).strip()
-        for token in _PARSER.parse(text)
-        if token.level == 0 and token.map and token.nesting >= 0
+    env: dict[str, typing.Any] = {}
+    spans = [
+        span
+        for token in _PARSER.parse(text, env)
+        if token.level == 0 and token.nesting >= 0 and (span := token.map)
     ]
-    parts: list[str] = []
-    current = ''
+    blocks = ['\n'.join(lines[start:end]).strip() for start, end in spans]
+    # Link reference definitions make no tokens. Each part gets a copy
+    # of the top-level definitions that its links use. A definition in
+    # a quote or a list is already in its block.
+    definitions = {
+        label: '\n'.join(lines[start:end]).strip()
+        for label, ref in env.get('references', {}).items()
+        for start, end in [ref['map']]
+        if not any(s <= start < e for s, e in spans)
+    }
+    parts: list[tuple[str, set[str]]] = []
+    current, used = '', set[str]()
     for block in blocks:
         candidate = f'{current}\n\n{block}' if current else block
-        if len(candidate) <= limit:
-            current = candidate
+        candidate_used = used | _labels(block, definitions)
+        # The part, a blank line, then one definition on each line.
+        extra = sum(len(definitions[label]) + 1 for label in candidate_used)
+        if len(candidate) + (extra + 1 if extra else 0) <= limit:
+            current, used = candidate, candidate_used
             continue
         if current:
-            parts.append(current)
-        current = block
+            parts.append((current, used))
+        current, used = block, _labels(block, definitions)
     if current:
-        parts.append(current)
-    return parts
+        parts.append((current, used))
+    return [
+        '\n\n'.join(
+            [part, '\n'.join(d for k, d in definitions.items() if k in used)]
+        )
+        if used
+        else part
+        for part, used in parts
+    ]
+
+
+def _labels(block: str, definitions: dict[str, str]) -> set[str]:
+    """Return the labels of the definitions that ``block`` uses.
+
+    markdown-it keys definitions by label in upper case, with each run
+    of white space changed to one space.
+
+    """
+    normalized = ' '.join(block.upper().split())
+    return {label for label in definitions if f'[{label}]' in normalized}
 
 
 async def post_markdown(
