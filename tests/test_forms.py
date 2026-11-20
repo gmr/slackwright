@@ -322,6 +322,7 @@ class ConvertTestCase(unittest.TestCase):
 class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.slack = await fake_slack.FakeSlack().__aenter__()
+        self.addAsyncCleanup(self.slack.__aexit__)
         self.store = await self.make_store()
         self.submissions: list[forms.Submission] = []
 
@@ -329,9 +330,6 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             self.submissions.append(submission)
 
         self.runtime = forms.Runtime(self.store, on_submit)
-
-    async def asyncTearDown(self) -> None:
-        await self.slack.__aexit__()
 
     async def make_store(self) -> forms.FormStore:
         return forms.MemoryFormStore()
