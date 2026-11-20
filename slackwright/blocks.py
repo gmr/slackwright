@@ -17,6 +17,13 @@ TABLE_ROW_LIMIT = 100
 TABLE_CELL_LIMIT = 20
 TABLE_TEXT_LIMIT = 10_000
 MARKDOWN_TEXT_LIMIT = 12_000
+TEXT_OBJECT_LIMIT = 3000
+"""Characters in one ``plain_text`` or ``mrkdwn`` text object."""
+
+
+def plain_text(text: str) -> dict[str, typing.Any]:
+    """Return a Block Kit ``plain_text`` object."""
+    return {'type': 'plain_text', 'text': text, 'emoji': True}
 
 
 class _Spec(pydantic.BaseModel):
@@ -51,7 +58,7 @@ class HeaderSpec(_Spec):
     def to_block(self) -> dict[str, typing.Any]:
         return {
             'type': 'header',
-            'text': {'type': 'plain_text', 'text': self.text, 'emoji': True},
+            'text': plain_text(self.text),
         }
 
 
@@ -69,7 +76,9 @@ class ContextSpec(_Spec):
 
     type: typing.Literal['context']
     elements: list[
-        typing.Annotated[str, pydantic.Field(min_length=1, max_length=3000)]
+        typing.Annotated[
+            str, pydantic.Field(min_length=1, max_length=TEXT_OBJECT_LIMIT)
+        ]
     ] = pydantic.Field(
         min_length=1,
         max_length=10,

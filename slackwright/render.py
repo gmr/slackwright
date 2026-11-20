@@ -10,6 +10,7 @@ the 12,000-character limit.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
@@ -69,6 +70,31 @@ def neutralize_broadcasts(text: str) -> str:
     """
     text = _SPECIAL.sub(f'<{_ZWSP}!', text)
     return _BARE_BROADCAST.sub(lambda m: f'@{_ZWSP}{m.group(1)}', text)
+
+
+_MRKDWN_RULES = (
+    (re.compile(r'^#{1,6}[ \t]+(.+?)[ \t#]*$', re.MULTILINE), r'**\1**'),
+    (re.compile(r'^([ \t]*)[-*+][ \t]+', re.MULTILINE), '\\1• '),
+    (re.compile(r'(?<![*\w])\*(?!\*)([^*\n]+?)\*(?![*\w])'), r'_\1_'),
+    (re.compile(r'\*\*(.+?)\*\*|__(.+?)__'), r'*\1\2*'),
+    (re.compile(r'~~(.+?)~~'), r'~\1~'),
+    (re.compile(r'\[([^\]\n]+)\]\((https?://[^)\s|>]+)\)'), r'<\2|\1>'),
+)
+
+
+def to_mrkdwn(markdown: str) -> str:
+    """Convert simple Markdown to Slack mrkdwn, for places that need it.
+
+    Use it only where Slack does not render Markdown, such as a modal
+    ``section`` block. Handles headings, bullet lists, bold, italic,
+    strikethrough, and links. ``&``, ``<``, and ``>`` are escaped first,
+    so the text cannot make a mention or a special token.
+
+    """
+    text = html.escape(markdown, quote=False)
+    for pattern, replacement in _MRKDWN_RULES:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:

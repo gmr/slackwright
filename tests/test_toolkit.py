@@ -2,7 +2,7 @@ import json
 import typing
 import unittest
 
-from slackwright import toolkit
+from slackwright import forms, toolkit
 from tests import fake_slack
 
 
@@ -262,3 +262,255 @@ class CallTestCase(unittest.IsolatedAsyncioTestCase):
         result = await self._kit().call('slack_post_markdown', {'text': 'a'})
         self.assertTrue(result.is_error)
         self.assertIn('not_in_channel', result.text)
+
+
+def _runtime() -> forms.Runtime:
+    async def on_submit(submission: forms.Submission) -> None:
+        return None
+
+    return forms.Runtime(forms.MemoryFormStore(), on_submit)
+
+
+FORM = {
+    'title': 'Lunch',
+    'intro': 'Pick one.',
+    'fields': [
+        {
+            'type': 'radio',
+            'id': 'meal',
+            'label': 'Meal',
+            'options': ['Soup', 'Salad'],
+        },
+    ],
+}
+
+
+class FeatureSchemaTestCase(unittest.TestCase):
+    def test_features_add_tools(self) -> None:
+        kit = toolkit.Toolkit(
+            None,
+            channel_id='C1',
+            thread_ts='1.0',
+            user_id='U1',
+            forms=_runtime(),
+            canvases=True,
+        )
+        tools = kit.anthropic()
+        self.assertEqual(
+            [tool['name'] for tool in tools],
+            [
+                'slack_post_markdown',
+                'slack_post_blocks',
+                'slack_create_form',
+                'slack_canvas_create',
+                'slack_canvas_edit',
+                'slack_canvas_read',
+            ],
+        )
+        for tool in tools:
+            self.assertGreater(len(tool['description']), 40)
+            for name, prop in _walk_properties(tool['input_schema']):
+                if name == 'type':
+                    continue
+                with self.subTest(tool=tool['name'], field=name):
+                    self.assertIn('description', prop)
+
+
+class FeatureCallTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.slack = await fake_slack.FakeSlack().__aenter__()
+        self.runtime = _runtime()
+
+    async def asyncTearDown(self) -> None:
+        await self.slack.__aexit__()
+
+    def _kit(self, **kwargs: typing.Any) -> toolkit.Toolkit:
+        options: dict[str, typing.Any] = {
+            'forms': self.runtime,
+            'canvases': True,
+        } | kwargs
+        return toolkit.Toolkit(
+            self.slack.client,
+            channel_id='C1',
+            thread_ts='1.0',
+            user_id='U1',
+            **options,
+        )
+
+    async def test_disabled_tools_are_unknown(self) -> None:
+        kit = self._kit(forms=None, canvases=False)
+        for name in ('slack_create_form', 'slack_canvas_read'):
+            result = await kit.call(name, {})
+            self.assertIn('unknown tool', result.text)
+
+    async def test_create_form(self) -> None:
+        kit = self._kit()
+        result = await kit.call('slack_create_form', FORM)
+        self.assertFalse(result.is_error, result.text)
+        data = json.loads(result.text)
+        self.assertIn('later turn', data['note'])
+        post = self.slack.payloads('chat.postMessage')[0]
+        self.assertEqual(post['thread_ts'], '1.0')
+        self.assertEqual(
+            post['blocks'][-1]['elements'][0]['value'], data['form_id']
+        )
+
+        second = await kit.call('slack_create_form', FORM)
+        self.assertIn('form limit reached', second.text)
+
+    async def test_create_form_problems(self) -> None:
+        kit = self._kit()
+        result = await kit.call(
+            'slack_create_form',
+            FORM
+            | {
+                'fields': [
+                    {'type': 'text', 'id': 'pw', 'label': 'Your password'}
+                ]
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn('secrets', result.text)
+        self.assertEqual(self.slack.calls, [])
+
+    async def test_form_counts_as_post(self) -> None:
+        kit = self._kit(max_posts=1, max_forms=2)
+        await kit.call('slack_post_markdown', {'text': 'hi'})
+        result = await kit.call('slack_create_form', FORM)
+        self.assertIn('post limit', result.text)
+
+    async def test_canvas_create(self) -> None:
+        self.slack.responses['canvases.create'] = {
+            'ok': True,
+            'canvas_id': 'F1',
+        }
+        kit = self._kit()
+        result = await kit.call(
+            'slack_canvas_create',
+            {'title': 'Notes', 'markdown': '# Notes <!here>'},
+        )
+        self.assertEqual(json.loads(result.text)['canvas_id'], 'F1')
+        created = self.slack.payloads('canvases.create')[0]
+        self.assertEqual(created['channel_id'], 'C1')
+        self.assertEqual(
+            created['document_content']['markdown'], '# Notes <\u200b!here>'
+        )
+        # A canvas that this toolkit created needs no share check.
+        self.slack.responses['canvases.getContent'] = {
+            'ok': True,
+            'content': '# Notes',
+        }
+        read = await kit.call('slack_canvas_read', {'canvas_id': 'F1'})
+        self.assertEqual(json.loads(read.text)['markdown'], '# Notes')
+        self.assertNotIn('files.info', self.slack.methods())
+
+    async def test_channel_canvas_exists(self) -> None:
+        self.slack.responses['conversations.canvases.create'] = {
+            'ok': False,
+            'error': 'channel_canvas_already_exists',
+        }
+        result = await self._kit().call(
+            'slack_canvas_create',
+            {'title': 'Notes', 'markdown': '# Notes', 'channel_canvas': True},
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn('already has a channel canvas', result.text)
+
+    async def test_canvas_access(self) -> None:
+        self.slack.responses['files.info'] = {
+            'ok': True,
+            'file': {'channels': ['C9']},
+        }
+        self.slack.responses['canvases.getContent'] = {
+            'ok': True,
+            'content': 'x' * (toolkit.CANVAS_READ_LIMIT + 1),
+        }
+        denied = await self._kit().call(
+            'slack_canvas_read', {'canvas_id': 'F2'}
+        )
+        self.assertIn('not shared with this channel', denied.text)
+
+        async def can_post(channel_id: str, user_id: str) -> bool:
+            return channel_id == 'C9'
+
+        allowed = await self._kit(can_post=can_post).call(
+            'slack_canvas_read', {'canvas_id': 'F2'}
+        )
+        data = json.loads(allowed.text)
+        self.assertTrue(data['truncated'])
+        self.assertEqual(len(data['markdown']), toolkit.CANVAS_READ_LIMIT)
+
+    async def test_canvas_edit(self) -> None:
+        self.slack.responses['files.info'] = {
+            'ok': True,
+            'file': {'channels': ['C1']},
+        }
+        self.slack.responses['canvases.sections.lookup'] = [
+            {'ok': True, 'sections': []},
+            {'ok': True, 'sections': [{'id': 'temp:1'}]},
+        ]
+        kit = self._kit(max_posts=1)
+        missing = await kit.call(
+            'slack_canvas_edit',
+            {
+                'canvas_id': 'F3',
+                'operation': 'replace',
+                'markdown': 'new',
+                'section_contains': 'Old',
+            },
+        )
+        self.assertIn('0 sections', missing.text)
+        # The failed lookup did not use up the post limit.
+        result = await kit.call(
+            'slack_canvas_edit',
+            {
+                'canvas_id': 'F3',
+                'operation': 'replace',
+                'markdown': 'new',
+                'section_contains': 'Old',
+            },
+        )
+        self.assertFalse(result.is_error, result.text)
+        self.assertEqual(len(self.slack.payloads('canvases.edit')), 1)
+
+    async def test_canvas_edit_input_rules(self) -> None:
+        kit = self._kit()
+        for arguments, message in (
+            (
+                {'operation': 'replace', 'markdown': 'x'},
+                'needs section_contains',
+            ),
+            ({'operation': 'insert_at_end'}, 'needs markdown'),
+        ):
+            result = await kit.call(
+                'slack_canvas_edit', {'canvas_id': 'F1', **arguments}
+            )
+            self.assertIn(message, result.text)
+        self.assertEqual(self.slack.calls, [])
+
+    async def test_form_intro_follows_broadcast_setting(self) -> None:
+        form = FORM | {'intro': '<!here> pick one'}
+        await self._kit().call('slack_create_form', form)
+        await self._kit(allow_broadcasts=True).call('slack_create_form', form)
+        intros = [
+            post['blocks'][1]['text']
+            for post in self.slack.payloads('chat.postMessage')
+        ]
+        self.assertEqual(
+            intros, ['<\u200b!here> pick one', '<!here> pick one']
+        )
+
+    async def test_canvas_check_is_remembered(self) -> None:
+        self.slack.responses['files.info'] = {
+            'ok': True,
+            'file': {'channels': ['C1']},
+        }
+        self.slack.responses['canvases.getContent'] = {
+            'ok': True,
+            'content': '# Doc',
+        }
+        kit = self._kit()
+        for _ in range(3):
+            result = await kit.call('slack_canvas_read', {'canvas_id': 'F4'})
+            self.assertFalse(result.is_error, result.text)
+        self.assertEqual(self.slack.methods().count('files.info'), 1)
