@@ -164,9 +164,11 @@ def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:
         current, used = block, _labels(block, definitions)
     if current:
         parts.append((current, used))
+    # Put the definitions first. At the end, an unclosed code fence
+    # would contain them.
     return [
         '\n\n'.join(
-            [part, '\n'.join(d for k, d in definitions.items() if k in used)]
+            ['\n'.join(d for k, d in definitions.items() if k in used), part]
         )
         if used
         else part

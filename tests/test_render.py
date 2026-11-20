@@ -150,7 +150,7 @@ class SplitMarkdownTestCase(unittest.TestCase):
         self.assertIn('[docs]: https://docs.test', parts[0])
         self.assertNotIn('guide.test', parts[0])
         self.assertTrue(
-            parts[-1].endswith(
+            parts[-1].startswith(
                 '[The  Guide]: https://guide.test\n    "Guide title"'
             )
         )
@@ -181,7 +181,14 @@ class SplitMarkdownTestCase(unittest.TestCase):
         definition = '[x]: https://x.test "a\u2028b"'
         text = '\n\n'.join(['See [x].', 'z' * 40, definition])
         parts = render.split_markdown(text, limit=60)
-        self.assertTrue(parts[0].endswith(definition))
+        self.assertTrue(parts[0].startswith(definition))
+
+    def test_definition_stays_out_of_unclosed_fence(self) -> None:
+        text = 'z' * 60 + '\n\n[x]: https://x.test\n\nSee [x].\n\n~~~\ncode'
+        parts = render.split_markdown(text, limit=60)
+        self.assertEqual(
+            parts[1], '[x]: https://x.test\n\nSee [x].\n\n~~~\ncode'
+        )
 
     def test_unused_definition_is_dropped(self) -> None:
         text = '\n\n'.join(['a' * 80, 'b' * 80, '[x]: https://x.test'])
