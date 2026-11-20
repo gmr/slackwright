@@ -392,8 +392,9 @@ slackwright interactions.
    handler posts an ephemeral message to that user with the errors.
 5. On success: `claim()`, then replace the inputs with a read-only
    summary (when `single_submission` is set) or send the user an
-   ephemeral "Thanks" (when it is not), and run `on_submit`. User
-   answers in the summary go through `neutralize_broadcasts`.
+   ephemeral "Thanks" (when it is not), and run `on_submit`. The
+   summary shows user answers as `plain_text`, so they cannot make
+   links, formatting, or mentions.
 
 ### 7.5 Expired forms
 

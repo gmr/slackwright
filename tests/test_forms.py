@@ -3,6 +3,7 @@ import unittest
 
 import pydantic
 
+from slackwright import blocks as block_specs
 from slackwright import forms
 from tests import fake_slack
 
@@ -548,9 +549,19 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             self.slack.client,
         )
         self.assertEqual(len(self.submissions), 1)
-        summary = self.slack.payloads('chat.update')[0]['blocks'][1]['text']
-        self.assertIn('**Slot**\nMorning', summary)
-        self.assertIn('**Notes**\n-', summary)
+        summary = self.slack.payloads('chat.update')[0]['blocks']
+        self.assertEqual(
+            [block['type'] for block in summary],
+            ['header', 'section', 'section', 'section', 'context'],
+        )
+        self.assertEqual(
+            [block['text'] for block in summary[1:4]],
+            [
+                block_specs.plain_text('Day\n2026-12-01'),
+                block_specs.plain_text('Slot\nMorning'),
+                block_specs.plain_text('Notes\n-'),
+            ],
+        )
 
         await self.runtime.handle_action(
             Ack(),
@@ -562,6 +573,23 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             self.slack.payloads('chat.postEphemeral')[-1]['text'],
         )
         self.assertEqual(len(self.submissions), 1)
+
+    async def test_inline_summary_is_plain_text(self) -> None:
+        record = await self.post(mode='inline', respondents='anyone')
+        evil = '[x](https://evil.example) <!here>'
+        state = answers(
+            day={'type': 'datepicker', 'selected_date': '2026-12-01'},
+            slot={'selected_option': {'value': 'Morning'}},
+            notes={'value': evil},
+        )
+        await self.runtime.handle_action(
+            Ack(),
+            self.click(record, forms.ACTION_SUBMIT, user='U2', state=state),
+            self.slack.client,
+        )
+        text = self.slack.payloads('chat.update')[0]['blocks'][3]['text']
+        self.assertEqual(text['type'], 'plain_text')
+        self.assertEqual(text['text'], f'Notes\n{evil}')
 
     async def test_inline_each_respondent_once(self) -> None:
         record = await self.post(

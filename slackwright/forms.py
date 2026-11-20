@@ -876,15 +876,18 @@ def _answered_blocks(
         {'type': 'header', 'text': _plain(record.spec.title)}
     ]
     if record.spec.mode == 'inline':
-        lines = [
-            f'**{field.label}**\n{_display(values.get(field.id))}'
-            for field in record.spec.fields
-        ]
-        blocks.append(
+        # plain_text shows no links, formatting, or mentions, so user
+        # answers cannot speak in the voice of the bot.
+        blocks.extend(
             {
-                'type': 'markdown',
-                'text': render.neutralize_broadcasts('\n\n'.join(lines)),
+                'type': 'section',
+                'text': _plain(
+                    f'{field.label}\n{_display(values.get(field.id))}'[
+                        : block_specs.TEXT_OBJECT_LIMIT
+                    ]
+                ),
             }
+            for field in record.spec.fields
         )
     blocks.append(_context(f'Answered by <@{user_id}>'))
     return blocks
