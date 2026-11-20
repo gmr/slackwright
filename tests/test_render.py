@@ -170,6 +170,19 @@ class SplitMarkdownTestCase(unittest.TestCase):
             self.assertLessEqual(len(part), render.MARKDOWN_LIMIT)
         self.assertIn('[d7]: https://x.test/7', parts[0])
 
+    def test_padded_label_keeps_its_definition(self) -> None:
+        text = '\n\n'.join(
+            ['See [manual][ docs ].', 'z' * 40, '[docs]: https://docs.test']
+        )
+        parts = render.split_markdown(text, limit=60)
+        self.assertIn('[docs]: https://docs.test', parts[0])
+
+    def test_line_separator_does_not_split_definition(self) -> None:
+        definition = '[x]: https://x.test "a\u2028b"'
+        text = '\n\n'.join(['See [x].', 'z' * 40, definition])
+        parts = render.split_markdown(text, limit=60)
+        self.assertTrue(parts[0].endswith(definition))
+
     def test_unused_definition_is_dropped(self) -> None:
         text = '\n\n'.join(['a' * 80, 'b' * 80, '[x]: https://x.test'])
         parts = render.split_markdown(text, limit=100)

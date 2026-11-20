@@ -130,7 +130,9 @@ def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:
     text = text.strip()
     if len(text) <= limit:
         return [text] if text else []
-    lines = text.splitlines()
+    # Use the line breaks of markdown-it. splitlines() also breaks at
+    # characters such as U+2028, so the token maps do not align.
+    lines = re.split(r'\r\n?|\n', text)
     env: dict[str, typing.Any] = {}
     spans = [
         span
@@ -176,11 +178,15 @@ def _labels(block: str, definitions: dict[str, str]) -> set[str]:
     """Return the labels of the definitions that ``block`` uses.
 
     markdown-it keys definitions by label in upper case, with each run
-    of white space changed to one space.
+    of white space changed to one space and no space at the ends.
 
     """
     normalized = ' '.join(block.upper().split())
-    return {label for label in definitions if f'[{label}]' in normalized}
+    return {
+        label
+        for label in definitions
+        if re.search(rf'\[ ?{re.escape(label)} ?\]', normalized)
+    }
 
 
 async def post_markdown(
