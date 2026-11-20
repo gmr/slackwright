@@ -179,13 +179,15 @@ def split_markdown(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:
 def _labels(block: str, definitions: dict[str, str]) -> set[str]:
     """Return the labels of the definitions that ``block`` uses.
 
-    markdown-it keys definitions by label in upper case, with each run
-    of white space changed to one space and no space at the ends.
+    markdown-it keys definitions by label in upper case (from
+    ``lower().upper()``), with each run of white space changed to one
+    space and no space at the ends. Only the space at an unescaped
+    ``[`` is removed, because a label can contain ``\\[``.
 
     """
-    normalized = (
-        ' '.join(block.upper().split()).replace('[ ', '[').replace(' ]', ']')
-    )
+    normalized = re.sub(
+        r'(?<!\\)\[ ', '[', ' '.join(block.lower().upper().split())
+    ).replace(' ]', ']')
     return {label for label in definitions if f'[{label}]' in normalized}
 
 

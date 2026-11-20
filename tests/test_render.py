@@ -177,6 +177,18 @@ class SplitMarkdownTestCase(unittest.TestCase):
         parts = render.split_markdown(text, limit=60)
         self.assertIn('[docs]: https://docs.test', parts[0])
 
+    def test_unicode_case_label_keeps_its_definition(self) -> None:
+        text = '\n\n'.join(['See [ẞ].', 'z' * 60, '[ẞ]: https://x.test'])
+        parts = render.split_markdown(text, limit=60)
+        self.assertIn('[ẞ]: https://x.test', parts[0])
+
+    def test_space_after_escaped_bracket_keeps_its_definition(self) -> None:
+        text = '\n\n'.join(
+            [r'See [a\[ b].', 'z' * 60, r'[a\[ b]: https://x.test']
+        )
+        parts = render.split_markdown(text, limit=60)
+        self.assertIn(r'[a\[ b]: https://x.test', parts[0])
+
     def test_line_separator_does_not_split_definition(self) -> None:
         definition = '[x]: https://x.test "a\u2028b"'
         text = '\n\n'.join(['See [x].', 'z' * 40, definition])
