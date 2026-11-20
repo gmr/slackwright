@@ -181,12 +181,10 @@ def _labels(block: str, definitions: dict[str, str]) -> set[str]:
     of white space changed to one space and no space at the ends.
 
     """
-    normalized = ' '.join(block.upper().split())
-    return {
-        label
-        for label in definitions
-        if re.search(rf'\[ ?{re.escape(label)} ?\]', normalized)
-    }
+    normalized = (
+        ' '.join(block.upper().split()).replace('[ ', '[').replace(' ]', ']')
+    )
+    return {label for label in definitions if f'[{label}]' in normalized}
 
 
 async def post_markdown(
