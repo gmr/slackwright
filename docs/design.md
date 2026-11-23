@@ -476,7 +476,11 @@ Anthropic-format messages:
 - Replaces `<@U123>` with display names (cached).
 - Downloads files and turns them into content blocks.
 - Keeps `bot_message` posts from integrations and webhooks. A post
-  without a `user` gets its name from `bot_profile.name` or `username`.
+  without a `user` gets the header `<bot:NAME BOT_ID>`, so it cannot
+  look like a person. NAME comes from `bot_profile.name` or `username`
+  (a webhook can set any username) and keeps only safe characters.
+- Labels a link preview (an attachment with `from_url`) as not written
+  by the author.
 - Adds the text of legacy `attachments` (pretext, title, text, fields,
   or the fallback) and of Block Kit `blocks` to other users' messages.
   Apps such as Front put the full report there, and link unfurls are

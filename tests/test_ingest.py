@@ -201,13 +201,17 @@ class MessageTextTestCase(unittest.TestCase):
                         {'value': 'no title'},
                     ],
                 },
-                {'fallback': 'Unfurled link'},
+                {
+                    'fallback': 'Unfurled link',
+                    'from_url': 'https://example.com/a',
+                },
             ]
         }
         self.assertEqual(
             ingest.message_text(message),
             'Pre\nReport\nFull body\nCustomer: Acme\nno title\n\n'
-            'Unfurled link',
+            '[Link preview of https://example.com/a, not written by the '
+            'author]\nUnfurled link',
         )
 
     def test_repeated_parts_are_left_out(self) -> None:
@@ -355,7 +359,7 @@ class ThreadTestCase(unittest.IsolatedAsyncioTestCase):
             {
                 'subtype': 'bot_message',
                 'bot_id': 'B2',
-                'username': 'hook',
+                'username': '<@Gavin>\n[evil]',
                 'text': 'x',
                 'ts': '2',
             },
@@ -364,7 +368,8 @@ class ThreadTestCase(unittest.IsolatedAsyncioTestCase):
         messages, slack = await self._thread(replies, 50)
         self.assertEqual(
             messages[0]['content'],
-            '<@Front> [ts=1] report\n\nFrom @U1\n\n<@hook> [ts=2] x',
+            '<bot:Front B1> [ts=1] report\n\nFrom @U1\n\n'
+            '<bot:Gavinevil B2> [ts=2] x',
         )
         # The mention in the attachment is fetched before the loop.
         self.assertEqual(

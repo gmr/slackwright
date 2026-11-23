@@ -78,6 +78,7 @@ _SKIPPED_BLOCK_TYPES = frozenset({'actions', 'button', 'rich_text'})
 repeats the message ``text``. Buttons have only labels."""
 _TEXT_OBJECT_TYPES = frozenset({'markdown', 'mrkdwn', 'plain_text'})
 _MENTION_RE = re.compile(r'<@([A-Z0-9]+)(?:\|[^>]+)?>')
+_UNSAFE_NAME_CHARS = re.compile(r'[^\w .()-]')
 _UNSAFE_URL_CHARS = re.compile(r'[\\\s\x00-\x1f\x7f]')
 
 
@@ -373,14 +374,19 @@ async def to_messages(
             blocks = await file_blocks(files_client, files) if files else []
             if not text and not blocks:
                 continue
-            name = (
-                await display_name(slack, author, cache)
-                if message.get('user')
-                else (message.get('bot_profile') or {}).get('name')
-                or message.get('username')
-                or author
-            )
-            header = f'<@{name}> [ts={message.get("ts", "")}] {text}'
+            if message.get('user'):
+                name = '@' + await display_name(slack, author, cache)
+            else:
+                # A webhook sets any username, so a bot must not look
+                # like a person, and its name must not break the header.
+                bot_name = str(
+                    (message.get('bot_profile') or {}).get('name')
+                    or message.get('username')
+                    or ''
+                )
+                safe = _UNSAFE_NAME_CHARS.sub('', bot_name)[:80]
+                name = f'bot:{safe} {_UNSAFE_NAME_CHARS.sub("", author)}'
+            header = f'<{name}> [ts={message.get("ts", "")}] {text}'
             content = [text_block(header.rstrip()), *blocks]
         if not content:
             continue
@@ -416,7 +422,14 @@ def message_text(message: dict[str, typing.Any]) -> str:
             *_block_texts(attachment.get('blocks')),
         ]
         body = [part for part in body if part]
-        parts.append('\n'.join(body) or attachment.get('fallback') or '')
+        part = '\n'.join(body) or attachment.get('fallback') or ''
+        # Slack adds a link preview. The author did not write it.
+        url = attachment.get('from_url') or attachment.get('original_url')
+        if part and url:
+            part = (
+                f'[Link preview of {url}, not written by the author]\n{part}'
+            )
+        parts.append(part)
     extra = [part for part in parts[1:] if part and part not in text]
     return '\n\n'.join(p for p in [text, *extra] if p)
 
