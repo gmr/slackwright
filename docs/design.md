@@ -475,9 +475,18 @@ Anthropic-format messages:
   turns. Ingest replaces them with a short text note.
 - Replaces `<@U123>` with display names (cached).
 - Downloads files and turns them into content blocks.
+- Keeps `bot_message` posts from integrations and webhooks. A post
+  without a `user` gets its name from `bot_profile.name` or `username`.
+- Adds the text of legacy `attachments` (pretext, title, text, fields,
+  or the fallback) and of Block Kit `blocks` to other users' messages.
+  Apps such as Front put the full report there, and link unfurls are
+  attachments. `rich_text` blocks repeat `text` and button labels are
+  noise, so ingest skips them. A part that `text` already contains is
+  left out.
 
 A bot that needs extra steps calls the lower-level functions
-(`file_blocks()`, `replace_mentions()`) and keeps its own loop.
+(`message_text()`, `file_blocks()`, `replace_mentions()`) and keeps its
+own loop.
 
 ### 9.2 Files
 
