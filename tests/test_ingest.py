@@ -155,6 +155,100 @@ class DownloadTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocks, [{'type': 'text', 'text': 'hello'}])
 
 
+class MessageTextTestCase(unittest.TestCase):
+    def test_blocks(self) -> None:
+        message = {
+            'text': 'New report',
+            'blocks': [
+                {
+                    'type': 'rich_text',
+                    'elements': [{'type': 'text', 'text': 'ignored'}],
+                },
+                {
+                    'type': 'section',
+                    'text': {'type': 'mrkdwn', 'text': '*Summary*'},
+                    'fields': [{'type': 'plain_text', 'text': 'P1'}],
+                    'accessory': {
+                        'type': 'button',
+                        'text': {'type': 'plain_text', 'text': 'Open'},
+                    },
+                },
+                {
+                    'type': 'actions',
+                    'elements': [
+                        {
+                            'type': 'button',
+                            'text': {'type': 'plain_text', 'text': 'Ack'},
+                        }
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(
+            ingest.message_text(message), 'New report\n\n*Summary*\nP1'
+        )
+
+    def test_attachments(self) -> None:
+        message = {
+            'attachments': [
+                {
+                    'fallback': 'unused',
+                    'pretext': 'Pre',
+                    'title': 'Report',
+                    'text': 'Full body',
+                    'fields': [
+                        {'title': 'Customer', 'value': 'Acme'},
+                        {'value': 'no title'},
+                    ],
+                },
+                {
+                    'fallback': 'Unfurled link',
+                    'from_url': 'https://example.com/a',
+                },
+            ]
+        }
+        self.assertEqual(
+            ingest.message_text(message),
+            'Pre\nReport\nFull body\nCustomer: Acme\nno title\n\n'
+            '[Link preview of https://example.com/a, not written by the '
+            'author]\nUnfurled link',
+        )
+
+    def test_repeated_parts_are_left_out(self) -> None:
+        message = {
+            'text': 'Deploy done for api',
+            'blocks': [
+                {
+                    'type': 'section',
+                    'text': {'type': 'mrkdwn', 'text': 'Deploy done'},
+                }
+            ],
+            'attachments': [{'fallback': 'for api'}],
+        }
+        self.assertEqual(ingest.message_text(message), 'Deploy done for api')
+
+    def test_repeated_parts_are_left_out_new_parts_kept(self) -> None:
+        message = {
+            'text': 'Summary',
+            'blocks': [
+                {
+                    'type': 'section',
+                    'text': {'type': 'mrkdwn', 'text': 'Summary'},
+                },
+                {
+                    'type': 'section',
+                    'text': {'type': 'mrkdwn', 'text': 'Details'},
+                },
+            ],
+            'attachments': [
+                {'fallback': 'unused', 'title': 'Summary', 'text': 'Body'}
+            ],
+        }
+        self.assertEqual(
+            ingest.message_text(message), 'Summary\n\nDetails\n\nBody'
+        )
+
+
 class ThreadTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_thread(self) -> None:
         image_url = 'https://files.slack.com/chart.png'
@@ -271,6 +365,56 @@ class ThreadTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             messages[0]['content'],
             '<@U1> [ts=1] hi\n\n<@U1> [ts=2] also',
+        )
+
+    async def test_bot_message_is_kept(self) -> None:
+        replies = [
+            {
+                'subtype': 'bot_message',
+                'bot_id': 'B1',
+                'bot_profile': {'name': 'Front'},
+                'text': 'report',
+                'ts': '1',
+                'attachments': [{'pretext': 'From <@U1>'}],
+            },
+            {
+                'subtype': 'bot_message',
+                'bot_id': 'B2',
+                'username': '<@Gavin>\n[evil]',
+                'text': 'x',
+                'ts': '2',
+            },
+            {'subtype': 'bot_message', 'text': 'no author', 'ts': '3'},
+        ]
+        messages, slack = await self._thread(replies, 50)
+        self.assertEqual(
+            messages[0]['content'],
+            '<bot:Front B1> [ts=1] report\n\nFrom @U1\n\n'
+            '<bot:Gavinevil B2> [ts=2] x',
+        )
+        # The mention in the attachment is fetched before the loop.
+        self.assertEqual(
+            [p['user'] for p in slack.payloads('users.info')], ['U1']
+        )
+
+    async def test_own_blocks_are_not_repeated(self) -> None:
+        replies = [
+            {'user': 'U1', 'text': 'hi', 'ts': '1'},
+            {
+                'user': 'UBOT',
+                'text': 'answer',
+                'ts': '2',
+                'blocks': [
+                    {
+                        'type': 'section',
+                        'text': {'type': 'mrkdwn', 'text': 'answer'},
+                    }
+                ],
+            },
+        ]
+        messages, _ = await self._thread(replies, 50)
+        self.assertEqual(
+            messages[1], {'role': 'assistant', 'content': 'answer'}
         )
 
     async def test_file_share_is_kept(self) -> None:

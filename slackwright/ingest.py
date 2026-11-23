@@ -3,7 +3,8 @@
 :func:`thread` reads a whole thread and gives back alternating
 ``user`` and ``assistant`` turns that start with a user turn, as the
 Anthropic Messages API requires. The lower-level functions
-(:func:`replace_mentions`, :func:`file_blocks`, :func:`file_to_block`)
+(:func:`message_text`, :func:`replace_mentions`, :func:`file_blocks`,
+:func:`file_to_block`)
 are public for bots that build the history themselves.
 
 File downloads send the bot token. :func:`http_client` makes a client
@@ -65,11 +66,19 @@ BINARY_AMBIGUOUS_MIMETYPES = frozenset(
     {'application/force-download', 'application/octet-stream'}
 )
 
-_KEPT_SUBTYPES = frozenset({None, 'file_share', 'thread_broadcast'})
+_KEPT_SUBTYPES = frozenset(
+    {None, 'bot_message', 'file_share', 'thread_broadcast'}
+)
 """Message subtypes that are turns. A message with an uploaded file can
 be a ``file_share``. A reply sent to the channel too is a
-``thread_broadcast``."""
+``thread_broadcast``. A post from an integration or a webhook is a
+``bot_message`` and can have a ``bot_id`` and no ``user``."""
+_SKIPPED_BLOCK_TYPES = frozenset({'actions', 'button', 'rich_text'})
+"""Block and element types that give no text to the model. ``rich_text``
+repeats the message ``text``. Buttons have only labels."""
+_TEXT_OBJECT_TYPES = frozenset({'markdown', 'mrkdwn', 'plain_text'})
 _MENTION_RE = re.compile(r'<@([A-Z0-9]+)(?:\|[^>]+)?>')
+_UNSAFE_NAME_CHARS = re.compile(r'[^\w .()-]')
 _UNSAFE_URL_CHARS = re.compile(r'[\\\s\x00-\x1f\x7f]')
 
 
@@ -324,28 +333,35 @@ async def to_messages(
     and document blocks only in user turns.
 
     """
+    # The bot's own blocks repeat its text, so only its text is used.
+    kept = [
+        (
+            message,
+            author,
+            message.get('text') or ''
+            if author == bot_user_id
+            else message_text(message),
+        )
+        for message in messages
+        if message.get('subtype') in _KEPT_SUBTYPES
+        and (author := message.get('user') or message.get('bot_id'))
+    ]
     cache: dict[str, str] = {}
     user_ids = {
-        message['user']
-        for message in messages
-        if message.get('user') and message.get('subtype') in _KEPT_SUBTYPES
-    } | {
+        message['user'] for message, _, _ in kept if message.get('user')
+    }
+    user_ids |= {
         match.group(1)
-        for message in messages
-        for match in _MENTION_RE.finditer(message.get('text') or '')
+        for _, _, raw in kept
+        for match in _MENTION_RE.finditer(raw)
     }
     await _gather(
         [display_name(slack, user_id, cache) for user_id in user_ids],
         NAME_CONCURRENCY,
     )
     turns: list[tuple[str, list[ContentBlock]]] = []
-    for message in messages:
-        author = message.get('user')
-        if message.get('subtype') not in _KEPT_SUBTYPES or not author:
-            continue
-        text = (
-            await replace_mentions(slack, message.get('text') or '', cache)
-        ).strip()
+    for message, author, raw in kept:
+        text = (await replace_mentions(slack, raw, cache)).strip()
         files: list[dict[str, typing.Any]] = message.get('files') or []
         if author == bot_user_id:
             role = 'assistant'
@@ -358,8 +374,19 @@ async def to_messages(
             blocks = await file_blocks(files_client, files) if files else []
             if not text and not blocks:
                 continue
-            name = await display_name(slack, author, cache)
-            header = f'<@{name}> [ts={message.get("ts", "")}] {text}'
+            if message.get('user'):
+                name = '@' + await display_name(slack, author, cache)
+            else:
+                # A webhook sets any username, so a bot must not look
+                # like a person, and its name must not break the header.
+                bot_name = str(
+                    (message.get('bot_profile') or {}).get('name')
+                    or message.get('username')
+                    or ''
+                )
+                safe = _UNSAFE_NAME_CHARS.sub('', bot_name)[:80]
+                name = f'bot:{safe} {_UNSAFE_NAME_CHARS.sub("", author)}'
+            header = f'<{name}> [ts={message.get("ts", "")}] {text}'
             content = [text_block(header.rstrip()), *blocks]
         if not content:
             continue
@@ -370,6 +397,62 @@ async def to_messages(
     while turns and turns[0][0] == 'assistant':
         turns.pop(0)
     return [_collapse(role, parts) for role, parts in turns]
+
+
+def message_text(message: dict[str, typing.Any]) -> str:
+    """Return a message's text with its blocks and legacy attachments.
+
+    Apps such as Front put a report in ``attachments`` or ``blocks``
+    and only a summary in ``text``. Link unfurls are attachments too.
+    Each extracted line that ``text`` already contains is left out.
+
+    """
+    text = message.get('text') or ''
+
+    def new(items: collections.abc.Iterable[str | None]) -> str:
+        return '\n'.join(item for item in items if item and item not in text)
+
+    parts = [new(_block_texts(message.get('blocks')))]
+    for attachment in message.get('attachments') or []:
+        fields = [
+            ': '.join(p for p in (field.get('title'), field.get('value')) if p)
+            for field in attachment.get('fields') or []
+        ]
+        body = [
+            attachment.get('pretext'),
+            attachment.get('title'),
+            attachment.get('text'),
+            *fields,
+            *_block_texts(attachment.get('blocks')),
+        ]
+        if any(body):
+            part = new(body)
+        else:
+            part = new([attachment.get('fallback')])
+        # Slack adds a link preview. The author did not write it.
+        url = attachment.get('from_url') or attachment.get('original_url')
+        if part and url:
+            part = (
+                f'[Link preview of {url}, not written by the author]\n{part}'
+            )
+        parts.append(part)
+    return '\n\n'.join(p for p in [text, *parts] if p)
+
+
+def _block_texts(node: typing.Any) -> collections.abc.Iterator[str]:
+    """Yield every text object in Block Kit ``node``, depth first."""
+    if isinstance(node, list):
+        for item in node:
+            yield from _block_texts(item)
+    elif isinstance(node, dict):
+        kind = node.get('type')
+        if kind in _SKIPPED_BLOCK_TYPES:
+            return
+        if kind in _TEXT_OBJECT_TYPES and isinstance(node.get('text'), str):
+            yield node['text']
+            return
+        for value in node.values():
+            yield from _block_texts(value)
 
 
 async def _gather[T](
