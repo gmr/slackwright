@@ -404,11 +404,15 @@ def message_text(message: dict[str, typing.Any]) -> str:
 
     Apps such as Front put a report in ``attachments`` or ``blocks``
     and only a summary in ``text``. Link unfurls are attachments too.
-    A part that ``text`` already contains is left out.
+    Each extracted line that ``text`` already contains is left out.
 
     """
     text = message.get('text') or ''
-    parts = [text, '\n'.join(_block_texts(message.get('blocks')))]
+
+    def new(items: collections.abc.Iterable[str | None]) -> str:
+        return '\n'.join(item for item in items if item and item not in text)
+
+    parts = [new(_block_texts(message.get('blocks')))]
     for attachment in message.get('attachments') or []:
         fields = [
             ': '.join(p for p in (field.get('title'), field.get('value')) if p)
@@ -421,8 +425,10 @@ def message_text(message: dict[str, typing.Any]) -> str:
             *fields,
             *_block_texts(attachment.get('blocks')),
         ]
-        body = [part for part in body if part]
-        part = '\n'.join(body) or attachment.get('fallback') or ''
+        if any(body):
+            part = new(body)
+        else:
+            part = new([attachment.get('fallback')])
         # Slack adds a link preview. The author did not write it.
         url = attachment.get('from_url') or attachment.get('original_url')
         if part and url:
@@ -430,8 +436,7 @@ def message_text(message: dict[str, typing.Any]) -> str:
                 f'[Link preview of {url}, not written by the author]\n{part}'
             )
         parts.append(part)
-    extra = [part for part in parts[1:] if part and part not in text]
-    return '\n\n'.join(p for p in [text, *extra] if p)
+    return '\n\n'.join(p for p in [text, *parts] if p)
 
 
 def _block_texts(node: typing.Any) -> collections.abc.Iterator[str]:

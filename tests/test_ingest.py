@@ -227,6 +227,27 @@ class MessageTextTestCase(unittest.TestCase):
         }
         self.assertEqual(ingest.message_text(message), 'Deploy done for api')
 
+    def test_repeated_parts_are_left_out_new_parts_kept(self) -> None:
+        message = {
+            'text': 'Summary',
+            'blocks': [
+                {
+                    'type': 'section',
+                    'text': {'type': 'mrkdwn', 'text': 'Summary'},
+                },
+                {
+                    'type': 'section',
+                    'text': {'type': 'mrkdwn', 'text': 'Details'},
+                },
+            ],
+            'attachments': [
+                {'fallback': 'unused', 'title': 'Summary', 'text': 'Body'}
+            ],
+        }
+        self.assertEqual(
+            ingest.message_text(message), 'Summary\n\nDetails\n\nBody'
+        )
+
 
 class ThreadTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_thread(self) -> None:
