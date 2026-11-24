@@ -648,6 +648,62 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             self.slack.payloads('chat.postEphemeral')[0]['text'],
         )
 
+    async def test_metadata_comes_back(self) -> None:
+        record = await self.runtime.post(
+            self.slack.client,
+            spec(),
+            channel_id='C1',
+            thread_ts=None,
+            requester='U1',
+            metadata={'ticket': 'T-7'},
+        )
+        await self.runtime.handle_view(
+            Ack(), self.submit(record.form_id, GOOD), self.slack.client
+        )
+        self.assertEqual(self.submissions[0].metadata, {'ticket': 'T-7'})
+
+    async def test_rejected_opens_the_form_again(self) -> None:
+        calls: list[str] = []
+
+        async def on_submit(submission: forms.Submission) -> None:
+            calls.append(submission.user_id)
+            if len(calls) == 1:
+                raise forms.Rejected('Pick another day.')
+
+        runtime = forms.Runtime(self.store, on_submit)
+        record = await self.post(mode='inline', respondents='anyone')
+        for user in ('U2', 'U3'):
+            await runtime.handle_action(
+                Ack(),
+                self.click(record, forms.ACTION_SUBMIT, user=user, state=GOOD),
+                self.slack.client,
+            )
+        self.assertEqual(calls, ['U2', 'U3'])
+        reopened = self.slack.payloads('chat.update')[1]['blocks']
+        self.assertEqual(reopened[-1]['type'], 'actions')
+        self.assertEqual(
+            self.slack.payloads('chat.postEphemeral')[0]['text'],
+            'Pick another day.',
+        )
+
+    async def test_rejected_without_retry_closes_the_form(self) -> None:
+        async def on_submit(submission: forms.Submission) -> None:
+            raise forms.Rejected('It was answered in Imbi.', retry=False)
+
+        runtime = forms.Runtime(self.store, on_submit)
+        record = await self.post()
+        for _ in range(2):
+            await runtime.handle_view(
+                Ack(), self.submit(record.form_id, GOOD), self.slack.client
+            )
+        closed = self.slack.payloads('chat.update')[1]['blocks']
+        self.assertEqual(
+            closed[-1]['elements'][0]['text'],
+            'Not sent: It was answered in Imbi.',
+        )
+        # The claim is kept, so the second submit is refused.
+        self.assertEqual(len(self.slack.payloads('chat.update')), 2)
+
     def test_register(self) -> None:
         registered: list[tuple[str, typing.Any, typing.Any]] = []
 

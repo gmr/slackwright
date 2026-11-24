@@ -52,6 +52,9 @@ class ValkeyFormStore:
             )
         )
 
+    async def release(self, key: str) -> None:
+        await self._client.delete(f'{self._prefix}claim:{key}')
+
 
 class PostgresFormStore:
     """A :class:`~slackwright.forms.FormStore` in PostgreSQL.
@@ -135,6 +138,13 @@ class PostgresFormStore:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, (key, ttl))
             return bool(cursor.rowcount == 1)
+
+    async def release(self, key: str) -> None:
+        query = self._sql.SQL('DELETE FROM {} WHERE claim_key = %s').format(
+            self._claims
+        )
+        async with self._pool.connection() as conn:
+            await conn.execute(query, (key,))
 
     async def purge_expired(self) -> int:
         """Delete expired records and claims. Return the rows deleted."""

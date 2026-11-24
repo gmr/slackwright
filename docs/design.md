@@ -320,10 +320,13 @@ class FormStore(Protocol):
     async def put(self, record: FormRecord, ttl: int) -> None: ...
     async def get(self, form_id: str) -> FormRecord | None: ...
     async def claim(self, key: str, ttl: int) -> bool: ...
+    async def release(self, key: str) -> None: ...
 ```
 
 `claim()` is atomic (for example, Redis `SET NX`). It returns `False`
-if the key is already claimed and the claim has not expired. The
+if the key is already claimed and the claim has not expired.
+`release()` removes a claim, so the key can be claimed again. The
+runtime calls it when `on_submit` raises `Rejected` with `retry`. The
 runtime builds the key: `form_id` when `single_submission` is set,
 and `form_id:user_id` when it is not. The second key stops a
 double-click from making two submissions.
@@ -340,13 +343,13 @@ Each store takes a client or pool that the bot already has. It does
 not open or close connections itself.
 
 - **Valkey:** `put` is `SET key value EX ttl`. `claim` is
-  `SET claim_key 1 NX EX ttl`. Expiry is automatic. Keys use a
+  `SET claim_key 1 NX EX ttl`. `release` is `DEL claim_key`. Expiry is automatic. Keys use a
   configurable prefix (default `slackwright:form:`).
 - **PostgreSQL:** two tables, `slackwright_forms (form_id PK, record
   JSONB, expires_at)` and `slackwright_form_claims (claim_key PK,
   expires_at)`. `claim` is `INSERT ... ON CONFLICT DO UPDATE ... WHERE
   expires_at <= now()`, so an expired claim is replaced and a live
-  claim is kept; it checks the row count. `get` ignores rows past
+  claim is kept; it checks the row count. `release` deletes the row. `get` ignores rows past
   `expires_at`.
   `await store.create_schema()` runs `CREATE TABLE IF NOT EXISTS`, and
   `await store.purge_expired()` deletes old rows; the bot calls it on a
@@ -355,7 +358,10 @@ not open or close connections itself.
 A bot with a different backend implements the protocol itself.
 
 `FormRecord` holds the spec, `channel_id`, `thread_ts`, `message_ts`,
-the requester, and the creation time. The default TTL is 7 days.
+the requester, the creation time, and `metadata`: data of the bot that
+`Runtime.post(..., metadata=...)` sets and each `Submission` gives
+back. Slack users never see it. A bot uses it to know what a form is
+for, with no store of its own. The default TTL is 7 days.
 
 All action IDs start with `slackwright:`, so `register()` matches only
 slackwright interactions.
@@ -422,6 +428,7 @@ class Submission:
     user_id: str
     channel_id: str
     thread_ts: str
+    metadata: dict[str, Any]  # from Runtime.post
 ```
 
 The bot decides what to do. The expected use: start a new agent turn
@@ -429,6 +436,23 @@ in the thread with the values as input. The values are untrusted
 data, and with `respondents='anyone'` they come from people other
 than the requester. The bot must mark them as data, not as
 instructions, in that turn.
+
+### 7.7 Rejected submissions
+
+`on_submit` can raise `forms.Rejected(message, retry=True)` when it
+cannot use the answers, for example when an API refuses them. The
+runtime sends `message` to the user as an ephemeral message. Then:
+
+- With `retry=True`: it releases the claim and, for a
+  `single_submission` form, puts the form back in the message. Someone
+  can submit again.
+- With `retry=False`: it keeps the claim and, for a
+  `single_submission` form, replaces the message with
+  "Not sent: `message`". The form is closed.
+
+Any other exception keeps the claim, because `on_submit` may have done
+part of its work. The user gets "Your answers were received, but
+processing failed."
 
 ## 8. Canvases
 
