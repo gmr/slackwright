@@ -697,10 +697,9 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
                 Ack(), self.submit(record.form_id, GOOD), self.slack.client
             )
         closed = self.slack.payloads('chat.update')[1]['blocks']
-        self.assertEqual(
-            closed[-1]['elements'][0]['text'],
-            'Not sent: It was answered in Imbi.',
-        )
+        reason = closed[-1]['elements'][0]
+        self.assertEqual(reason['type'], 'plain_text')
+        self.assertEqual(reason['text'], 'Not sent: It was answered in Imbi.')
         # The claim is kept, so the second submit is refused.
         self.assertEqual(len(self.slack.payloads('chat.update')), 2)
 

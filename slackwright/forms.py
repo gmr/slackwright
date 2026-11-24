@@ -845,7 +845,18 @@ class Runtime:
             else:
                 blocks = [
                     {'type': 'header', 'text': _plain(record.spec.title)},
-                    _context(f'Not sent: {rejected.message}'),
+                    # plain_text, so the reason (often text from an
+                    # API) makes no links, formatting, or mentions.
+                    {
+                        'type': 'context',
+                        'elements': [
+                            _plain(
+                                f'Not sent: {rejected.message}'[
+                                    : block_specs.TEXT_OBJECT_LIMIT
+                                ]
+                            )
+                        ],
+                    },
                 ]
             await _update(client, record, blocks, f'Form: {record.spec.title}')
         await _ephemeral(client, record, user_id, rejected.message)
