@@ -523,6 +523,9 @@ class FormRecord(pydantic.BaseModel):
     message_ts: str | None = None
     requester: str
     created_at: float
+    metadata: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    """Data of the bot, given back on each :class:`Submission`. Slack
+    users never see it."""
 
     def allows(self, user_id: str) -> bool:
         """Return ``True`` if ``user_id`` can answer this form."""
@@ -543,7 +546,8 @@ class FormStore(typing.Protocol):
     """Keeps posted forms between the post and the answers.
 
     ``claim`` must be atomic: of two calls with the same key, only one
-    returns ``True`` until ``ttl`` seconds pass.
+    returns ``True`` until ``ttl`` seconds pass, or until ``release``
+    removes the claim.
 
     """
 
@@ -552,6 +556,8 @@ class FormStore(typing.Protocol):
     async def get(self, form_id: str) -> FormRecord | None: ...
 
     async def claim(self, key: str, ttl: int) -> bool: ...
+
+    async def release(self, key: str) -> None: ...
 
 
 class MemoryFormStore:
@@ -586,6 +592,9 @@ class MemoryFormStore:
         self._claims[key] = now + ttl
         return True
 
+    async def release(self, key: str) -> None:
+        self._claims.pop(key, None)
+
 
 @dataclasses.dataclass(frozen=True)
 class Submission:
@@ -608,6 +617,23 @@ class Submission:
     user_id: str
     channel_id: str
     thread_ts: str | None
+    metadata: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
+class Rejected(Exception):  # noqa: N818 - reads as forms.Rejected
+    """Raise in ``on_submit`` to refuse a submission.
+
+    The user who submitted gets ``message`` as an ephemeral message.
+    With ``retry`` (the default), the runtime releases the claim and
+    shows the form again, so someone can submit it again. Without
+    ``retry``, the form closes, and its message shows ``message``.
+
+    """
+
+    def __init__(self, message: str, *, retry: bool = True) -> None:
+        super().__init__(message)
+        self.message = message
+        self.retry = retry
 
 
 OnSubmit = collections.abc.Callable[
@@ -651,8 +677,14 @@ class Runtime:
         channel_id: str,
         thread_ts: str | None,
         requester: str,
+        metadata: dict[str, typing.Any] | None = None,
     ) -> FormRecord:
-        """Post ``spec`` as a message and store it. Return the record."""
+        """Post ``spec`` as a message and store it. Return the record.
+
+        ``metadata`` is data of the bot that comes back on each
+        :class:`Submission`. It must be JSON-serializable.
+
+        """
         record = FormRecord(
             form_id=secrets.token_urlsafe(12),
             spec=spec,
@@ -660,6 +692,7 @@ class Runtime:
             thread_ts=thread_ts,
             requester=requester,
             created_at=time.time(),
+            metadata=metadata or {},
         )
         # Store before posting, so that a fast click finds the form.
         await self._store.put(record, self._ttl)
@@ -758,23 +791,13 @@ class Runtime:
         values: dict[str, typing.Any],
     ) -> None:
         async with inflight.track():
-            if record.spec.single_submission and record.message_ts:
-                try:
-                    await client.chat_update(
-                        channel=record.channel_id,
-                        ts=record.message_ts,
-                        blocks=_answered_blocks(record, user_id, values),
-                        text=f'Form: {record.spec.title} (answered)',
-                    )
-                except (
-                    errors.SlackApiError,
-                    aiohttp.ClientError,
-                    TimeoutError,
-                ) as error:
-                    # The update is cosmetic. Deliver the answers anyway.
-                    LOGGER.warning(
-                        'Could not update form %s: %r', record.form_id, error
-                    )
+            if record.spec.single_submission:
+                await _update(
+                    client,
+                    record,
+                    _answered_blocks(record, user_id, values),
+                    f'Form: {record.spec.title} (answered)',
+                )
             elif record.spec.mode == 'inline':
                 await _ephemeral(
                     client, record, user_id, 'Thanks. Your answers were sent.'
@@ -786,11 +809,15 @@ class Runtime:
                 user_id=user_id,
                 channel_id=record.channel_id,
                 thread_ts=record.thread_ts,
+                metadata=record.metadata,
             )
-            # ponytail: the claim stays held after a failure, so the
-            # user cannot submit again; add FormStore.release for retry.
+            # ponytail: the claim stays held after an unexpected error,
+            # because on_submit may have done part of its work. Raise
+            # Rejected to let the user submit again.
             try:
                 await self._on_submit(submission)
+            except Rejected as rejected:
+                await self._reject(client, record, user_id, rejected)
             except Exception:
                 LOGGER.exception(
                     'on_submit failed for form %s', record.form_id
@@ -801,6 +828,50 @@ class Runtime:
                     user_id,
                     'Your answers were received, but processing failed.',
                 )
+
+    async def _reject(
+        self,
+        client: typing.Any,
+        record: FormRecord,
+        user_id: str,
+        rejected: Rejected,
+    ) -> None:
+        """Open the form again, or close it, and tell the user why.
+
+        The form opens again before the claim is released, so a later
+        accepted submission is never overwritten by the open form. When
+        the form cannot open again, the claim is kept.
+
+        """
+        reopened = True
+        if record.spec.single_submission:
+            if rejected.retry:
+                blocks = _message_blocks(record)
+            else:
+                blocks = [
+                    {'type': 'header', 'text': _plain(record.spec.title)},
+                    # plain_text, so the reason (often text from an
+                    # API) makes no links, formatting, or mentions.
+                    {
+                        'type': 'context',
+                        'elements': [
+                            _plain(
+                                f'Not sent: {rejected.message}'[
+                                    : block_specs.TEXT_OBJECT_LIMIT
+                                ]
+                            )
+                        ],
+                    },
+                ]
+            reopened = await _update(
+                client, record, blocks, f'Form: {record.spec.title}'
+            )
+        message = _escape(rejected.message)
+        if rejected.retry and reopened:
+            await self._store.release(record.claim_key(user_id))
+        elif rejected.retry:
+            message += ' The form could not open again.'
+        await _ephemeral(client, record, user_id, message)
 
 
 def _parse(
@@ -941,6 +1012,34 @@ def _first_input(view: dict[str, typing.Any]) -> str:
 
 def _number_text(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else str(value)
+
+
+async def _update(
+    client: typing.Any,
+    record: FormRecord,
+    blocks: list[dict[str, typing.Any]],
+    text: str,
+) -> bool:
+    """Replace the blocks of the form message. Return ``False`` and log
+    when Slack refuses it."""
+    if not record.message_ts:
+        return False
+    try:
+        await client.chat_update(
+            channel=record.channel_id,
+            ts=record.message_ts,
+            blocks=blocks,
+            text=text,
+        )
+    except (errors.SlackApiError, aiohttp.ClientError, TimeoutError) as error:
+        LOGGER.warning('Could not update form %s: %r', record.form_id, error)
+        return False
+    return True
+
+
+def _escape(text: str) -> str:
+    """Escape ``text`` for mrkdwn, so it makes no links or mentions."""
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 async def _ephemeral(

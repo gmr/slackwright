@@ -74,6 +74,14 @@ class StoreTests:
         test.assertEqual(sorted(results), [False] * 4 + [True])
         test.assertTrue(await self.store.claim(f'{key}:U2', 60))
 
+    async def test_release(self) -> None:
+        test = typing.cast(unittest.TestCase, self)
+        key = uuid.uuid4().hex
+        test.assertTrue(await self.store.claim(key, 60))
+        await self.store.release(key)
+        test.assertTrue(await self.store.claim(key, 60))
+        await self.store.release(uuid.uuid4().hex)  # no claim: no error
+
     async def test_expiry(self) -> None:
         test = typing.cast(unittest.TestCase, self)
         form_id, key = uuid.uuid4().hex, uuid.uuid4().hex
