@@ -441,11 +441,15 @@ instructions, in that turn.
 
 `on_submit` can raise `forms.Rejected(message, retry=True)` when it
 cannot use the answers, for example when an API refuses them. The
-runtime sends `message` to the user as an ephemeral message. Then:
+runtime sends `message` to the user as an ephemeral message, with
+`&`, `<`, and `>` escaped so it makes no links or mentions. Then:
 
-- With `retry=True`: it releases the claim and, for a
-  `single_submission` form, puts the form back in the message. Someone
-  can submit again.
+- With `retry=True`: for a `single_submission` form, it puts the form
+  back in the message, then releases the claim. Someone can submit
+  again. This order means the open form never replaces a later
+  accepted answer. When Slack refuses the update, the claim is kept,
+  because the message has no submit button, and the user is told
+  that the form could not open again.
 - With `retry=False`: it keeps the claim and, for a
   `single_submission` form, replaces the message with
   "Not sent: `message`". The form is closed.

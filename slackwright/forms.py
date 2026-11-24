@@ -836,9 +836,14 @@ class Runtime:
         user_id: str,
         rejected: Rejected,
     ) -> None:
-        """Open the form again, or close it, and tell the user why."""
-        if rejected.retry:
-            await self._store.release(record.claim_key(user_id))
+        """Open the form again, or close it, and tell the user why.
+
+        The form opens again before the claim is released, so a later
+        accepted submission is never overwritten by the open form. When
+        the form cannot open again, the claim is kept.
+
+        """
+        reopened = True
         if record.spec.single_submission:
             if rejected.retry:
                 blocks = _message_blocks(record)
@@ -858,8 +863,15 @@ class Runtime:
                         ],
                     },
                 ]
-            await _update(client, record, blocks, f'Form: {record.spec.title}')
-        await _ephemeral(client, record, user_id, rejected.message)
+            reopened = await _update(
+                client, record, blocks, f'Form: {record.spec.title}'
+            )
+        message = _escape(rejected.message)
+        if rejected.retry and reopened:
+            await self._store.release(record.claim_key(user_id))
+        elif rejected.retry:
+            message += ' The form could not open again.'
+        await _ephemeral(client, record, user_id, message)
 
 
 def _parse(
@@ -1007,11 +1019,11 @@ async def _update(
     record: FormRecord,
     blocks: list[dict[str, typing.Any]],
     text: str,
-) -> None:
-    """Replace the blocks of the form message. Log a failure: the
-    update is cosmetic."""
+) -> bool:
+    """Replace the blocks of the form message. Return ``False`` and log
+    when Slack refuses it."""
     if not record.message_ts:
-        return
+        return False
     try:
         await client.chat_update(
             channel=record.channel_id,
@@ -1021,6 +1033,13 @@ async def _update(
         )
     except (errors.SlackApiError, aiohttp.ClientError, TimeoutError) as error:
         LOGGER.warning('Could not update form %s: %r', record.form_id, error)
+        return False
+    return True
+
+
+def _escape(text: str) -> str:
+    """Escape ``text`` for mrkdwn, so it makes no links or mentions."""
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 async def _ephemeral(

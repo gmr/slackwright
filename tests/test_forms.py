@@ -686,6 +686,28 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             'Pick another day.',
         )
 
+    async def test_rejected_keeps_the_claim_when_the_form_cannot_open(
+        self,
+    ) -> None:
+        async def on_submit(submission: forms.Submission) -> None:
+            raise forms.Rejected('Try <!here> again.')
+
+        runtime = forms.Runtime(self.store, on_submit)
+        record = await self.post()
+        self.slack.responses['chat.update'] = {
+            'ok': False,
+            'error': 'message_not_found',
+        }
+        with self.assertLogs('slackwright.forms', 'WARNING'):
+            await runtime.handle_view(
+                Ack(), self.submit(record.form_id, GOOD), self.slack.client
+            )
+        self.assertFalse(await self.store.claim(record.form_id, 60))
+        self.assertEqual(
+            self.slack.payloads('chat.postEphemeral')[0]['text'],
+            'Try &lt;!here&gt; again. The form could not open again.',
+        )
+
     async def test_rejected_without_retry_closes_the_form(self) -> None:
         async def on_submit(submission: forms.Submission) -> None:
             raise forms.Rejected('It was answered in Imbi.', retry=False)
